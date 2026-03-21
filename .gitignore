@@ -1,0 +1,101 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files (keep structure, ignore contents)
+data/raw/*
+data/processed/*
+data/training/*
+data/rollouts/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/training/.gitkeep
+!data/rollouts/.gitkeep
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# API keys and secrets
+config/secrets.yaml
+config/api_keys.yaml
+
+# Chrome history (don't accidentally commit!)
+*History*
+*history*
+
+# Logs
+*.log
+logs/
+
+# Model checkpoints (if training locally)
+checkpoints/
+models/*.pth
+models/*.pt
+models/*.bin
+models/*.safetensors
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test outputs
+test_output/
+test_outputs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation builds
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# Misc
+*.bak
+*.backup
+*.old
