@@ -24,6 +24,12 @@ dependencies = []
 dev = [
   "pytest>=8.0.0"
 ]
+mlx = [
+  "mlx-lm>=0.21.0"
+]
+gemini = [
+  "google-genai>=1.0.0"
+]
 
 [project.scripts]
 lwm = "life_world_model.cli:main"

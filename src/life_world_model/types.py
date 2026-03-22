@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
-@dataclass(slots=True)
+@dataclass
 class RawEvent:
     timestamp: datetime
     source: str
@@ -13,7 +13,7 @@ class RawEvent:
     url: str | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class LifeState:
     timestamp: datetime
     primary_activity: str
@@ -23,7 +23,7 @@ class LifeState:
     confidence: float
 
 
-@dataclass(slots=True)
+@dataclass
 class NarrativeFrame:
     timestamp: datetime
     narrative: str
