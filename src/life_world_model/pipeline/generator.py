@@ -28,6 +28,94 @@ def build_prompt(states: list[LifeState]) -> str:
     )
 
 
+SYSTEM_PROMPT = (
+    "You are a narrator writing in the style of J.R.R. Tolkien. "
+    "You transform mundane computer activity logs into rich, grounded fantasy prose. "
+    "Stay faithful to the timeline — do not invent activities not present in the data. "
+    "If a period is idle or sparse, describe it with atmospheric brevity rather than fabricating detail. "
+    "Write in past tense. Produce a single cohesive narrative of 200-400 words. "
+    "Output ONLY the narrative prose — no headings, no bullet points, no meta-commentary."
+)
+
+
+def generate_with_gemini(
+    states: list[LifeState],
+    target_date: date,
+    model_name: str,
+    api_key: str,
+) -> str:
+    """Generate a prose narrative using the Gemini API."""
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+
+    user_msg = (
+        f"Write a Tolkien-esque narrative for {target_date.isoformat()}.\n\n"
+        + build_prompt(states)
+    )
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=user_msg,
+        config=genai.types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.8,
+            max_output_tokens=4096,
+            thinking_config=genai.types.ThinkingConfig(
+                thinking_budget=0,
+            ),
+        ),
+    )
+
+    return response.text
+
+
+def generate_with_mlx(
+    states: list[LifeState],
+    target_date: date,
+    model_name: str,
+) -> str:
+    """Generate a prose narrative using a local MLX model."""
+    from mlx_lm import generate, load
+
+    model, tokenizer = load(model_name)
+
+    user_msg = (
+        f"/no_think\n"
+        f"Write a Tolkien-esque narrative for {target_date.isoformat()}.\n\n"
+        + build_prompt(states)
+    )
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+    formatted = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+    response = generate(
+        model,
+        tokenizer,
+        prompt=formatted,
+        max_tokens=1024,
+        verbose=False,
+    )
+
+    return response
+
+
+def render_narrative_markdown(
+    target_date: date, states: list[LifeState], prose: str
+) -> str:
+    lines = [f"# Narrative for {target_date.isoformat()}", ""]
+    lines.append(prose.strip())
+    lines.extend(["", "---", "", "## Timeline", ""])
+    for timeline_line in build_timeline_lines(states):
+        lines.append(timeline_line)
+    return "\n".join(lines) + "\n"
+
+
 def render_fallback_markdown(target_date: date, states: list[LifeState]) -> str:
     lines = [f"# Narrative for {target_date.isoformat()}", "", "## Timeline", ""]
     for timeline_line in build_timeline_lines(states):

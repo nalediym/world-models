@@ -31,6 +31,7 @@ ENV/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -82,6 +83,12 @@ models/*.safetensors
 tmp/
 temp/
 *.tmp
+*.heapsnapshot
+
+# Local machine/runtime files
+.envrc
+.python-version
+.tool-versions
 
 # Test outputs
 test_output/
