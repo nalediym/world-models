@@ -16,7 +16,24 @@ class Settings:
     gemini_api_key: str | None = None
 
 
+def _load_dotenv() -> None:
+    """Load .env file into os.environ if it exists. No external deps."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key not in os.environ:
+            os.environ[key] = value
+
+
 def load_settings() -> Settings:
+    _load_dotenv()
     database_path = Path(os.getenv("LWM_DATABASE_PATH", "data/raw/life_world_model.sqlite3"))
     output_dir = Path(os.getenv("LWM_OUTPUT_DIR", "data/processed/rollouts"))
     chrome_history_path = Path(
