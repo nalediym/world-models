@@ -124,10 +124,5 @@ See `docs/ULTRAPLAN-BRIEF.md` for full context and `.claude/plans/` for the acti
 
 ## User Context
 
-- **Ideal day:** $10K revenue, automated/systematic/clean, exercised (boxing + pilates), medicines taken
-- **Optimization goals:** Goal alignment (0.4) > Energy/sustainability (0.3) > Flow/low context-switching (0.3)
-- **Suspected time sink:** Claude Code / AI tools — validate with knowledgeC data first
-- **Approach:** System discovers problems from data. User does NOT self-report habits.
-- **Suggestions:** Passive with summary + expandable detail. One proactive daily morning briefing.
-- **Notifications:** Proactive macOS notifications enabled.
-- **Voice:** Configurable per command (--style tolkien | --style plain)
+See local planning docs (gitignored) for personal goals and preferences.
+Optimization weights: alignment=0.4, energy=0.3, flow=0.3.

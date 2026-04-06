@@ -54,7 +54,7 @@ class TestParseGitLogLine:
 
 class TestRepoName:
     def test_extracts_directory_name(self) -> None:
-        assert _repo_name(Path("/Users/naledi/Projects/world-models")) == "world-models"
+        assert _repo_name(Path("/home/user/Projects/world-models")) == "world-models"
 
     def test_trailing_slash_handled(self) -> None:
         # Path normalises trailing slashes anyway

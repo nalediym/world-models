@@ -68,6 +68,13 @@ config/api_keys.yaml
 **/History
 **/History-journal
 
+# Planning docs with personal data (stay on disk, never push)
+docs/ULTRAPLAN-BRIEF.md
+docs/ULTRAPLAN-PROMPT.md
+
+# gstack security reports and analytics
+.gstack/
+
 # Logs
 *.log
 logs/
