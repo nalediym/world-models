@@ -16,6 +16,10 @@ from life_world_model.pipeline.generator import (
     write_rollout,
 )
 from life_world_model.storage.sqlite_store import SQLiteStore
+from life_world_model.analysis.pattern_discovery import discover_patterns
+from life_world_model.analysis.narrator import narrate_patterns
+from life_world_model.goals.engine import load_goals
+from life_world_model.scoring.formula import format_score_report, score_day
 
 
 def parse_date(value: str) -> date:
@@ -285,6 +289,96 @@ def run_generate(date_value: str) -> int:
     return 0
 
 
+def run_patterns(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    show_only: bool = False,
+) -> int:
+    settings = load_settings()
+    store = SQLiteStore(settings.database_path)
+
+    if show_only:
+        # Load events for full range and display discovered patterns
+        end = date.today()
+        start = end - timedelta(days=30)
+        events = store.load_raw_events_for_range(start, end + timedelta(days=1))
+        if not events:
+            print("No data found. Run 'lwm collect' first.")
+            return 0
+        multi_day_states: dict[date, list] = {}
+        from collections import defaultdict
+
+        day_events: dict[date, list] = defaultdict(list)
+        for event in events:
+            day_events[event.timestamp.date()].append(event)
+        for day, day_evts in sorted(day_events.items()):
+            states = build_life_states(day_evts, bucket_minutes=settings.bucket_minutes)
+            if states:
+                multi_day_states[day] = states
+        patterns = discover_patterns(multi_day_states)
+        if not patterns:
+            print("No patterns found in the data.")
+            return 0
+        text = narrate_patterns(patterns)
+        print(text)
+        return 0
+
+    end = parse_date(end_date) if end_date else date.today()
+    start = parse_date(start_date) if start_date else end - timedelta(days=30)
+
+    multi_day_states = {}
+    current = start
+    while current <= end:
+        events = store.load_raw_events_for_date(current)
+        if events:
+            states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
+            if states:
+                multi_day_states[current] = states
+        current += timedelta(days=1)
+
+    if not multi_day_states:
+        print(f"No data found for {start} to {end}. Run 'lwm collect' first.")
+        return 0
+
+    patterns = discover_patterns(multi_day_states)
+
+    if not patterns:
+        print(f"No patterns discovered from {len(multi_day_states)} days of data.")
+        return 0
+
+    for p in patterns:
+        print(f"  [{p.category}] {p.name} (confidence: {p.confidence:.0%}, {p.days_observed} days)")
+        print(f"    {p.description}")
+
+    print(f"\nDiscovered {len(patterns)} patterns from {len(multi_day_states)} days of data.")
+    return 0
+
+
+def run_goals(subcmd: str = "list") -> int:
+    """Show goals or score today's progress against them."""
+    if subcmd == "list":
+        goals = load_goals()
+        print("Current goals:")
+        for g in goals:
+            print(f"  {g.name:20s} weight={g.weight:.0%}  metric={g.metric}")
+            print(f"    {g.description}")
+        return 0
+
+    if subcmd == "progress":
+        settings = load_settings()
+        store = SQLiteStore(settings.database_path)
+        today = date.today()
+        events = store.load_raw_events_for_date(today)
+        states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
+        goals = load_goals()
+        result = score_day(states, goals)
+        print(format_score_report(result, today))
+        return 0
+
+    print(f"Unknown goals subcommand: {subcmd}. Use 'list' or 'progress'.")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Personal life world model MVP CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -309,6 +403,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("sources", help="List all collectors, their availability, and data paths")
 
+    patterns_parser = subparsers.add_parser(
+        "patterns", help="Discover behavioral patterns from collected data"
+    )
+    patterns_parser.add_argument(
+        "--range",
+        nargs=2,
+        metavar=("START", "END"),
+        dest="date_range",
+        default=None,
+        help="Date range in YYYY-MM-DD format (default: last 30 days)",
+    )
+    patterns_parser.add_argument(
+        "--show",
+        action="store_true",
+        dest="show_only",
+        help="Display patterns with narrative summary",
+    )
+
+    goals_parser = subparsers.add_parser("goals", help="View goals or score today's progress")
+    goals_parser.add_argument(
+        "goals_subcmd",
+        nargs="?",
+        default="list",
+        choices=["list", "progress"],
+        help="Subcommand: list (default) or progress",
+    )
+
     return parser
 
 
@@ -329,6 +450,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_generate(args.date_value)
     if args.command == "sources":
         return run_sources()
+    if args.command == "patterns":
+        date_range = getattr(args, "date_range", None)
+        start = date_range[0] if date_range else None
+        end = date_range[1] if date_range else None
+        return run_patterns(
+            start_date=start,
+            end_date=end,
+            show_only=getattr(args, "show_only", False),
+        )
+    if args.command == "goals":
+        return run_goals(getattr(args, "goals_subcmd", "list"))
 
     parser.error(f"Unknown command: {args.command}")
     return 2
