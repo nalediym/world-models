@@ -64,9 +64,9 @@ data/rollouts/*
 config/secrets.yaml
 config/api_keys.yaml
 
-# Chrome history (don't accidentally commit!)
-*History*
-*history*
+# Chrome history database (don't accidentally commit!)
+**/History
+**/History-journal
 
 # Logs
 *.log
