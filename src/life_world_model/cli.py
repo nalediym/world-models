@@ -103,15 +103,22 @@ def run_collect(
     collectors = _build_collectors(settings, source)
     total = 0
     for collector in collectors:
+        name = collector.source_name
         if not collector.is_available():
+            print(f"  {name:12s} ✗ unavailable (check lwm sources for details)")
             continue
         try:
             events = collector.collect_for_date(target_date)
             store.save_raw_events(events)
-            print(f"  {collector.source_name}: {len(events)} events")
+            if events:
+                print(f"  {name:12s} {len(events)} events")
+            else:
+                print(f"  {name:12s} 0 events (no activity on {target_date})")
             total += len(events)
+        except PermissionError:
+            print(f"  {name:12s} ✗ permission denied (grant Full Disk Access in System Settings)")
         except Exception as e:
-            print(f"  {collector.source_name}: error — {e}")
+            print(f"  {name:12s} ✗ error — {e}")
 
     print(f"Collected {total} events into {settings.database_path}")
     return 0
@@ -269,7 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     collect_parser = subparsers.add_parser("collect", help="Collect one day of activity from all sources")
-    collect_parser.add_argument("--date", default=None, dest="date_value", help="Date in YYYY-MM-DD format (required unless --backfill)")
+    collect_parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     collect_parser.add_argument("--demo", action="store_true", help="Use bundled demo data instead of real sources")
     collect_parser.add_argument("--source", default=None, help="Collect from a single source (e.g. chrome, shell, git)")
     collect_parser.add_argument(
@@ -279,10 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     generate_parser = subparsers.add_parser("generate", help="Generate one day narrative")
-    generate_parser.add_argument("--date", required=True, dest="date_value", help="Date in YYYY-MM-DD format")
+    generate_parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
 
     run_parser = subparsers.add_parser("run", help="Collect then generate")
-    run_parser.add_argument("--date", required=True, dest="date_value", help="Date in YYYY-MM-DD format")
+    run_parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     run_parser.add_argument("--demo", action="store_true", help="Use bundled demo data instead of real sources")
     run_parser.add_argument("--source", default=None, help="Collect from a single source (e.g. chrome, shell, git)")
 
@@ -298,8 +305,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "collect":
         if getattr(args, "backfill", False):
             return run_backfill(source=getattr(args, "source", None))
-        if not args.date_value:
-            parser.error("--date is required (unless using --backfill)")
         return run_collect(args.date_value, use_demo=args.demo, source=args.source)
     if args.command == "generate":
         return run_generate(args.date_value)
@@ -317,7 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def collect_entrypoint() -> int:
     parser = argparse.ArgumentParser(description="Collect one day of activity from all sources")
-    parser.add_argument("--date", default=None, dest="date_value", help="Date in YYYY-MM-DD format (required unless --backfill)")
+    parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     parser.add_argument("--demo", action="store_true", help="Use bundled demo data instead of real sources")
     parser.add_argument("--source", default=None, help="Collect from a single source (e.g. chrome, shell, git)")
     parser.add_argument(
@@ -328,21 +333,19 @@ def collect_entrypoint() -> int:
     args = parser.parse_args()
     if args.backfill:
         return run_backfill(source=args.source)
-    if not args.date_value:
-        parser.error("--date is required (unless using --backfill)")
     return run_collect(args.date_value, use_demo=args.demo, source=args.source)
 
 
 def generate_entrypoint() -> int:
     parser = argparse.ArgumentParser(description="Generate one day narrative")
-    parser.add_argument("--date", required=True, dest="date_value", help="Date in YYYY-MM-DD format")
+    parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     args = parser.parse_args()
     return run_generate(args.date_value)
 
 
 def run_entrypoint() -> int:
     parser = argparse.ArgumentParser(description="Collect then generate one day narrative")
-    parser.add_argument("--date", required=True, dest="date_value", help="Date in YYYY-MM-DD format")
+    parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     parser.add_argument("--demo", action="store_true", help="Use bundled demo data instead of real sources")
     parser.add_argument("--source", default=None, help="Collect from a single source (e.g. chrome, shell, git)")
     args = parser.parse_args()

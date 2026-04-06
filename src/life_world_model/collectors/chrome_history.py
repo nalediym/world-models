@@ -9,13 +9,7 @@ from urllib.parse import urlparse
 
 from life_world_model.collectors.base import BaseCollector, register_collector
 from life_world_model.types import RawEvent
-
-
-EPOCH_START = datetime(1601, 1, 1, tzinfo=timezone.utc)
-
-
-def chrome_time_to_datetime(value: int) -> datetime:
-    return EPOCH_START + timedelta(microseconds=value)
+from life_world_model.utils.timestamps import chrome_time_to_datetime
 
 
 def resolve_domain(url: str | None) -> str | None:

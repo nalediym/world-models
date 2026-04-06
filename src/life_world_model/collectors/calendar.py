@@ -11,11 +11,9 @@ from pathlib import Path
 
 from life_world_model.collectors.base import BaseCollector, register_collector
 from life_world_model.types import RawEvent
+from life_world_model.utils.timestamps import MAC_EPOCH, mac_epoch_to_datetime, mac_epoch_from_datetime
 
 logger = logging.getLogger(__name__)
-
-# Apple's Core Data timestamp epoch: 2001-01-01 00:00:00 UTC.
-MAC_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
 CACHE_FILENAME = "Calendar Cache"
 
@@ -26,18 +24,6 @@ WHERE ZSTARTDATE >= ? AND ZSTARTDATE < ?
   AND ZTITLE IS NOT NULL
 ORDER BY ZSTARTDATE ASC
 """
-
-
-def mac_epoch_to_datetime(seconds: float) -> datetime:
-    """Convert a Mac epoch timestamp (seconds since 2001-01-01 UTC) to a timezone-aware datetime."""
-    return MAC_EPOCH + timedelta(seconds=seconds)
-
-
-def datetime_to_mac_epoch(dt: datetime) -> float:
-    """Convert a timezone-aware datetime to Mac epoch seconds."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return (dt - MAC_EPOCH).total_seconds()
 
 
 @register_collector
@@ -90,8 +76,8 @@ class CalendarCollector(BaseCollector):
         )
         day_end = day_start + timedelta(days=1)
 
-        start_seconds = datetime_to_mac_epoch(day_start)
-        end_seconds = datetime_to_mac_epoch(day_end)
+        start_seconds = mac_epoch_from_datetime(day_start)
+        end_seconds = mac_epoch_from_datetime(day_end)
 
         # Copy to temp to avoid locking issues.
         try:

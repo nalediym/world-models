@@ -10,11 +10,13 @@ from unittest.mock import patch
 import pytest
 
 from life_world_model.collectors.calendar import (
-    MAC_EPOCH,
     CACHE_FILENAME,
     CalendarCollector,
-    datetime_to_mac_epoch,
+)
+from life_world_model.utils.timestamps import (
+    MAC_EPOCH,
     mac_epoch_to_datetime,
+    mac_epoch_from_datetime as datetime_to_mac_epoch,
 )
 from life_world_model.types import RawEvent
 

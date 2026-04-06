@@ -10,9 +10,7 @@ from pathlib import Path
 
 from life_world_model.collectors.base import BaseCollector, register_collector
 from life_world_model.types import RawEvent
-
-# macOS Core Data timestamps use 2001-01-01 00:00:00 UTC as epoch.
-MAC_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+from life_world_model.utils.timestamps import MAC_EPOCH, mac_epoch_to_datetime
 
 # Stream types we care about.
 STREAM_APP_IN_FOCUS = "/app/inFocus"
@@ -34,11 +32,6 @@ BUNDLE_ID_MAP: dict[str, str] = {
     "com.apple.finder": "Finder",
     "com.anthropic.claudecode": "Claude Code",
 }
-
-
-def mac_epoch_to_datetime(seconds: float) -> datetime:
-    """Convert a Mac absolute-time timestamp to a timezone-aware UTC datetime."""
-    return MAC_EPOCH + timedelta(seconds=seconds)
 
 
 def bundle_id_to_app_name(bundle_id: str | None) -> str:
