@@ -105,6 +105,49 @@ def generate_with_mlx(
     return response
 
 
+def generate_with_cli(
+    states: list[LifeState],
+    target_date: date,
+    cli_command: str,
+) -> str:
+    """Generate prose by piping the prompt to a CLI tool (gemini, claude, etc.).
+
+    Uses the CLI's own authentication — no API key needed.
+    Supported commands: 'gemini', 'claude'.
+    """
+    import shutil
+    import subprocess
+
+    binary = shutil.which(cli_command)
+    if not binary:
+        raise FileNotFoundError(f"{cli_command} CLI not found in PATH")
+
+    user_msg = (
+        f"Write a Tolkien-esque narrative for {target_date.isoformat()}.\n\n"
+        + build_prompt(states)
+    )
+    full_prompt = f"{SYSTEM_PROMPT}\n\n{user_msg}"
+
+    if cli_command == "gemini":
+        cmd = [binary, "-p", full_prompt]
+    elif cli_command == "claude":
+        cmd = [binary, "-p", full_prompt, "--output-format", "text"]
+    else:
+        cmd = [binary, "-p", full_prompt]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"{cli_command} CLI failed: {result.stderr.strip()}")
+
+    return result.stdout.strip()
+
+
 def render_narrative_markdown(
     target_date: date, states: list[LifeState], prose: str
 ) -> str:

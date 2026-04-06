@@ -8,6 +8,7 @@ from life_world_model.config import Settings, load_settings
 from life_world_model.demo_data import build_demo_events
 from life_world_model.pipeline.bucketizer import build_life_states
 from life_world_model.pipeline.generator import (
+    generate_with_cli,
     generate_with_gemini,
     generate_with_mlx,
     render_fallback_markdown,
@@ -250,6 +251,19 @@ def _generate_content(settings, states, target_date):
         except ImportError:
             print("mlx-lm not installed — falling back to timeline output.")
             print("Install it with: pip install 'life-world-model[mlx]'")
+            return render_fallback_markdown(target_date, states)
+
+    if settings.llm_provider in ("gemini-cli", "claude-cli"):
+        cli_cmd = settings.llm_provider.replace("-cli", "")
+        try:
+            print(f"Generating narrative with {cli_cmd} CLI ...")
+            prose = generate_with_cli(states, target_date, cli_cmd)
+            return render_narrative_markdown(target_date, states, prose)
+        except FileNotFoundError:
+            print(f"{cli_cmd} CLI not found in PATH — falling back to timeline output.")
+            return render_fallback_markdown(target_date, states)
+        except Exception as e:
+            print(f"{cli_cmd} CLI error: {e} — falling back to timeline output.")
             return render_fallback_markdown(target_date, states)
 
     return render_fallback_markdown(target_date, states)
