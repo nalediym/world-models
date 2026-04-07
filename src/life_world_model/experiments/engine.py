@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import date, timedelta
 
-from life_world_model.config import Settings, load_settings
+from life_world_model.config import load_settings
 from life_world_model.goals.engine import load_goals
 from life_world_model.pipeline.bucketizer import build_life_states
 from life_world_model.scoring.formula import score_day
@@ -12,7 +12,9 @@ from life_world_model.types import Experiment, ExperimentStatus
 
 
 def _make_id(description: str, start: date) -> str:
-    key = f"{description}:{start.isoformat()}"
+    import time
+
+    key = f"{description}:{start.isoformat()}:{time.monotonic_ns()}"
     return hashlib.sha256(key.encode()).hexdigest()[:8]
 
 

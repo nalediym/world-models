@@ -460,7 +460,6 @@ def run_suggest(
         match = next((s for s in suggestions if s.id == target_id), None)
         title = match.title if match else f"(id:{target_id})"
 
-        from datetime import datetime
         feedback = SuggestionFeedback(
             suggestion_id=target_id,
             suggestion_title=title,
