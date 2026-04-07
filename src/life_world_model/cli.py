@@ -17,9 +17,13 @@ from life_world_model.pipeline.generator import (
 )
 from life_world_model.storage.sqlite_store import SQLiteStore
 from life_world_model.analysis.pattern_discovery import discover_patterns
+from life_world_model.analysis.suggestions import generate_suggestions
 from life_world_model.analysis.narrator import narrate_patterns
+from life_world_model.daemon.collector import run_daemon
 from life_world_model.goals.engine import load_goals
+from life_world_model.notifications.briefing import morning_briefing
 from life_world_model.scoring.formula import format_score_report, score_day
+from life_world_model.simulation.engine import simulate
 
 
 def parse_date(value: str) -> date:
@@ -379,6 +383,73 @@ def run_goals(subcmd: str = "list") -> int:
     return 2
 
 
+def run_simulate(text: str, baseline_date: str | None = None) -> int:
+    """Run a what-if simulation against baseline data."""
+    settings = load_settings()
+    store = SQLiteStore(settings.database_path)
+
+    bl_date = parse_date(baseline_date) if baseline_date else None
+    result = simulate(store, settings, text, baseline_date=bl_date)
+    print(result.summary)
+    return 0
+
+
+def run_suggest(detail: bool = False) -> int:
+    """Generate suggestions from discovered patterns."""
+    settings = load_settings()
+    store = SQLiteStore(settings.database_path)
+
+    end = date.today()
+    start = end - timedelta(days=30)
+
+    multi_day_states: dict[date, list] = {}
+    current = start
+    while current <= end:
+        events = store.load_raw_events_for_date(current)
+        if events:
+            states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
+            if states:
+                multi_day_states[current] = states
+        current += timedelta(days=1)
+
+    if not multi_day_states:
+        print("No data found. Run 'lwm collect' first.")
+        return 0
+
+    patterns = discover_patterns(multi_day_states)
+    if not patterns:
+        print("No patterns found — cannot generate suggestions yet.")
+        return 0
+
+    suggestions = generate_suggestions(patterns)
+    if not suggestions:
+        print("No actionable suggestions from current patterns.")
+        return 0
+
+    for i, s in enumerate(suggestions, 1):
+        print(f"{i}. [{s.predicted_impact.upper()}] {s.title}")
+        print(f"   {s.rationale}")
+        if detail:
+            print(f"   Type: {s.intervention_type} | Delta: {s.score_delta:+.1%}")
+            print(f"   Based on: {', '.join(s.source_patterns)}")
+        print()
+
+    return 0
+
+
+def run_watch(interval: int = 60) -> int:
+    """Run the daemon loop (foreground)."""
+    run_daemon(interval_minutes=interval)
+    return 0
+
+
+def run_briefing() -> int:
+    """Send the morning briefing notification."""
+    text = morning_briefing()
+    print(text)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Personal life world model MVP CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -430,6 +501,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Subcommand: list (default) or progress",
     )
 
+    simulate_parser = subparsers.add_parser(
+        "simulate", help="Run a what-if simulation"
+    )
+    simulate_parser.add_argument(
+        "scenario", help="Natural language scenario (e.g. 'code from 8-10am')"
+    )
+    simulate_parser.add_argument(
+        "--baseline",
+        default=None,
+        dest="baseline_date",
+        help="Baseline date in YYYY-MM-DD format (default: best of last 7 days)",
+    )
+
+    suggest_parser = subparsers.add_parser(
+        "suggest", help="Generate actionable suggestions from patterns"
+    )
+    suggest_parser.add_argument(
+        "--detail",
+        action="store_true",
+        help="Show intervention type, score delta, and source patterns",
+    )
+
+    watch_parser = subparsers.add_parser(
+        "watch", help="Run the collection daemon (foreground)"
+    )
+    watch_parser.add_argument(
+        "--interval",
+        type=int,
+        default=60,
+        help="Collection interval in minutes (default: 60)",
+    )
+
+    subparsers.add_parser("briefing", help="Send the morning briefing notification")
+
     return parser
 
 
@@ -461,6 +566,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "goals":
         return run_goals(getattr(args, "goals_subcmd", "list"))
+    if args.command == "simulate":
+        return run_simulate(
+            args.scenario,
+            baseline_date=getattr(args, "baseline_date", None),
+        )
+    if args.command == "suggest":
+        return run_suggest(detail=getattr(args, "detail", False))
+    if args.command == "watch":
+        return run_watch(interval=getattr(args, "interval", 60))
+    if args.command == "briefing":
+        return run_briefing()
 
     parser.error(f"Unknown command: {args.command}")
     return 2
