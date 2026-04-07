@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from life_world_model.types import Pattern, Suggestion
 
 # ---------------------------------------------------------------------------
@@ -195,6 +197,11 @@ def generate_suggestions(patterns: list[Pattern]) -> list[Suggestion]:
 
     # Sort: impact (high > medium > low), then abs(score_delta) descending
     deduped.sort(key=lambda s: (_impact_rank(s.predicted_impact), -abs(s.score_delta)))
+
+    # Assign stable IDs based on title + intervention_type
+    for s in deduped:
+        key = f"{s.title}:{s.intervention_type}"
+        s.id = hashlib.sha256(key.encode()).hexdigest()[:8]
 
     return deduped
 

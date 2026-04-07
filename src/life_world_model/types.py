@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from enum import Enum
 
 
 @dataclass
@@ -64,3 +65,37 @@ class Suggestion:
     source_patterns: list[str] = field(default_factory=list)
     predicted_impact: str = "medium"
     score_delta: float = 0.0
+    id: str | None = None
+
+
+class FeedbackAction(Enum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+
+
+@dataclass
+class SuggestionFeedback:
+    suggestion_id: str
+    suggestion_title: str
+    action: FeedbackAction
+    timestamp: datetime = field(default_factory=datetime.now)
+    notes: str | None = None
+
+
+class ExperimentStatus(Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class Experiment:
+    id: str
+    description: str
+    intervention: str  # natural-language intervention text
+    duration_days: int
+    start_date: date
+    status: ExperimentStatus = ExperimentStatus.ACTIVE
+    baseline_score: float | None = None
+    result_score: float | None = None
+    result_summary: str | None = None

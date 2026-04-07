@@ -18,12 +18,20 @@ from life_world_model.pipeline.generator import (
 from life_world_model.storage.sqlite_store import SQLiteStore
 from life_world_model.analysis.pattern_discovery import discover_patterns
 from life_world_model.analysis.suggestions import generate_suggestions
+from life_world_model.types import FeedbackAction, SuggestionFeedback
 from life_world_model.analysis.narrator import narrate_patterns
 from life_world_model.daemon.collector import run_daemon
 from life_world_model.goals.engine import load_goals
 from life_world_model.notifications.briefing import morning_briefing
 from life_world_model.scoring.formula import format_score_report, score_day
+from life_world_model.experiments.engine import (
+    cancel_experiment,
+    check_experiment_status,
+    format_experiment_status,
+    start_experiment,
+)
 from life_world_model.simulation.engine import simulate
+from life_world_model.types import ExperimentStatus
 
 
 def parse_date(value: str) -> date:
@@ -394,11 +402,8 @@ def run_simulate(text: str, baseline_date: str | None = None) -> int:
     return 0
 
 
-def run_suggest(detail: bool = False) -> int:
-    """Generate suggestions from discovered patterns."""
-    settings = load_settings()
-    store = SQLiteStore(settings.database_path)
-
+def _load_suggestions(settings, store):
+    """Load multi-day states and generate suggestions. Returns (suggestions, error_msg)."""
     end = date.today()
     start = end - timedelta(days=30)
 
@@ -413,21 +418,69 @@ def run_suggest(detail: bool = False) -> int:
         current += timedelta(days=1)
 
     if not multi_day_states:
-        print("No data found. Run 'lwm collect' first.")
-        return 0
+        return [], "No data found. Run 'lwm collect' first."
 
     patterns = discover_patterns(multi_day_states)
     if not patterns:
-        print("No patterns found — cannot generate suggestions yet.")
-        return 0
+        return [], "No patterns found — cannot generate suggestions yet."
 
     suggestions = generate_suggestions(patterns)
+    return suggestions, None
+
+
+def run_suggest(
+    detail: bool = False,
+    accept_id: str | None = None,
+    reject_id: str | None = None,
+    history: bool = False,
+) -> int:
+    """Generate suggestions from discovered patterns."""
+    settings = load_settings()
+    store = SQLiteStore(settings.database_path)
+
+    if history:
+        feedback_list = store.load_suggestion_feedback()
+        if not feedback_list:
+            print("No suggestion feedback recorded yet.")
+            return 0
+        for fb in feedback_list:
+            icon = "+" if fb.action == FeedbackAction.ACCEPT else "-"
+            date_str = fb.timestamp.strftime("%Y-%m-%d")
+            print(f"  [{icon}] {fb.suggestion_title} ({date_str})")
+            if fb.notes:
+                print(f"      {fb.notes}")
+        return 0
+
+    if accept_id or reject_id:
+        target_id = accept_id or reject_id
+        action = FeedbackAction.ACCEPT if accept_id else FeedbackAction.REJECT
+
+        # Find the suggestion to get its title
+        suggestions, err = _load_suggestions(settings, store)
+        match = next((s for s in suggestions if s.id == target_id), None)
+        title = match.title if match else f"(id:{target_id})"
+
+        from datetime import datetime
+        feedback = SuggestionFeedback(
+            suggestion_id=target_id,
+            suggestion_title=title,
+            action=action,
+        )
+        store.save_suggestion_feedback(feedback)
+        verb = "Accepted" if action == FeedbackAction.ACCEPT else "Rejected"
+        print(f"{verb}: {title}")
+        return 0
+
+    suggestions, err = _load_suggestions(settings, store)
+    if err:
+        print(err)
+        return 0
     if not suggestions:
         print("No actionable suggestions from current patterns.")
         return 0
 
     for i, s in enumerate(suggestions, 1):
-        print(f"{i}. [{s.predicted_impact.upper()}] {s.title}")
+        print(f"{i}. [{s.predicted_impact.upper()}] {s.title}  (id: {s.id})")
         print(f"   {s.rationale}")
         if detail:
             print(f"   Type: {s.intervention_type} | Delta: {s.score_delta:+.1%}")
@@ -441,6 +494,76 @@ def run_watch(interval: int = 60) -> int:
     """Run the daemon loop (foreground)."""
     run_daemon(interval_minutes=interval)
     return 0
+
+
+def run_experiment(
+    subcmd: str,
+    description: str | None = None,
+    duration: int = 3,
+    experiment_id: str | None = None,
+) -> int:
+    """Manage experiments: start, status, results, cancel."""
+    settings = load_settings()
+    store = SQLiteStore(settings.database_path)
+
+    if subcmd == "start":
+        if not description:
+            print("Usage: lwm experiment start \"description\" --duration 3")
+            return 2
+        exp = start_experiment(
+            store,
+            description=description,
+            intervention=description,
+            duration_days=duration,
+        )
+        print(f"Experiment started!")
+        print(format_experiment_status(exp))
+        return 0
+
+    if subcmd == "status":
+        experiments = store.load_experiments()
+        if not experiments:
+            print("No experiments. Start one with: lwm experiment start \"try X for 3 days\"")
+            return 0
+        for exp in experiments:
+            exp = check_experiment_status(store, exp)
+            print(format_experiment_status(exp))
+            print()
+        return 0
+
+    if subcmd == "results":
+        experiments = store.load_experiments(status=ExperimentStatus.COMPLETED)
+        if not experiments:
+            active = store.load_experiments(status=ExperimentStatus.ACTIVE)
+            if active:
+                print(f"{len(active)} experiment(s) still active. Check back when they complete.")
+            else:
+                print("No completed experiments.")
+            return 0
+        for exp in experiments:
+            print(format_experiment_status(exp))
+            print()
+        return 0
+
+    if subcmd == "cancel":
+        if not experiment_id:
+            # Cancel most recent active experiment
+            active = store.load_experiments(status=ExperimentStatus.ACTIVE)
+            if not active:
+                print("No active experiments to cancel.")
+                return 0
+            exp = cancel_experiment(store, active[0])
+        else:
+            exp = store.load_experiment(experiment_id)
+            if not exp:
+                print(f"Experiment {experiment_id} not found.")
+                return 2
+            exp = cancel_experiment(store, exp)
+        print(f"Cancelled: {exp.description}")
+        return 0
+
+    print(f"Unknown experiment subcommand: {subcmd}. Use start, status, results, or cancel.")
+    return 2
 
 
 def run_briefing() -> int:
@@ -522,6 +645,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show intervention type, score delta, and source patterns",
     )
+    suggest_parser.add_argument(
+        "--accept",
+        metavar="ID",
+        default=None,
+        help="Accept a suggestion by its short ID",
+    )
+    suggest_parser.add_argument(
+        "--reject",
+        metavar="ID",
+        default=None,
+        help="Reject a suggestion by its short ID",
+    )
+    suggest_parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Show past accepted/rejected suggestions",
+    )
 
     watch_parser = subparsers.add_parser(
         "watch", help="Run the collection daemon (foreground)"
@@ -531,6 +671,33 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=60,
         help="Collection interval in minutes (default: 60)",
+    )
+
+    experiment_parser = subparsers.add_parser(
+        "experiment", help="Track habit-change experiments"
+    )
+    experiment_parser.add_argument(
+        "experiment_subcmd",
+        choices=["start", "status", "results", "cancel"],
+        help="Subcommand: start, status, results, or cancel",
+    )
+    experiment_parser.add_argument(
+        "experiment_description",
+        nargs="?",
+        default=None,
+        help="Experiment description (for 'start')",
+    )
+    experiment_parser.add_argument(
+        "--duration",
+        type=int,
+        default=3,
+        help="Experiment duration in days (default: 3)",
+    )
+    experiment_parser.add_argument(
+        "--id",
+        default=None,
+        dest="experiment_id",
+        help="Experiment ID (for 'cancel')",
     )
 
     subparsers.add_parser("briefing", help="Send the morning briefing notification")
@@ -572,9 +739,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             baseline_date=getattr(args, "baseline_date", None),
         )
     if args.command == "suggest":
-        return run_suggest(detail=getattr(args, "detail", False))
+        return run_suggest(
+            detail=getattr(args, "detail", False),
+            accept_id=getattr(args, "accept", None),
+            reject_id=getattr(args, "reject", None),
+            history=getattr(args, "history", False),
+        )
     if args.command == "watch":
         return run_watch(interval=getattr(args, "interval", 60))
+    if args.command == "experiment":
+        return run_experiment(
+            subcmd=args.experiment_subcmd,
+            description=getattr(args, "experiment_description", None),
+            duration=getattr(args, "duration", 3),
+            experiment_id=getattr(args, "experiment_id", None),
+        )
     if args.command == "briefing":
         return run_briefing()
 
