@@ -27,6 +27,9 @@ class TestMorningBriefing:
             for h in range(8, 18)
         ]
         mock_store_cls.return_value.load_raw_events_for_date.return_value = events
+        mock_store_cls.return_value.load_experiments.return_value = []
+        mock_store_cls.return_value.load_patterns.return_value = []
+        mock_store_cls.return_value.load_suggestion_feedback.return_value = []
 
         result = morning_briefing()
 

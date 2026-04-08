@@ -215,7 +215,7 @@ class TestEventChain:
         bus.on(SuggestionsReady, lambda e: suggestion_events.append(e))
 
         from life_world_model.daemon.handlers import _make_suggestion_handler
-        bus.on(PatternsUpdated, _make_suggestion_handler(bus), name="suggester")
+        bus.on(PatternsUpdated, _make_suggestion_handler(bus, store), name="suggester")
 
         pattern = Pattern(
             name="test_routine",

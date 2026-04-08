@@ -3,16 +3,19 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, timedelta
 
+from life_world_model.analysis.pattern_discovery import discover_patterns
+from life_world_model.analysis.suggestions import generate_suggestions
 from life_world_model.config import load_settings
 from life_world_model.goals.engine import load_goals
 from life_world_model.notifications.macos import send_notification
 from life_world_model.pipeline.bucketizer import build_life_states
 from life_world_model.scoring.formula import score_day
 from life_world_model.storage.sqlite_store import SQLiteStore
+from life_world_model.types import ExperimentStatus
 
 
 def morning_briefing() -> str:
-    """Score yesterday, format a brief summary, send macOS notification, return text."""
+    """Score yesterday, include experiments + top suggestion, send notification."""
     settings = load_settings()
     store = SQLiteStore(settings.database_path)
 
@@ -41,11 +44,28 @@ def morning_briefing() -> str:
         s.context_switches for s in states if s.context_switches is not None
     )
 
-    msg = (
+    lines = [
         f"Yesterday: {total:.0%} ({grade}) | "
         f"Top: {top_activity} ({top_hours:.1f}hrs) | "
         f"{switches} switches"
-    )
+    ]
 
+    # Active experiments
+    active = store.load_experiments(status=ExperimentStatus.ACTIVE)
+    if active:
+        exp = active[0]
+        end_date = exp.start_date + timedelta(days=exp.duration_days)
+        days_left = (end_date - date.today()).days
+        lines.append(f"Experiment: {exp.description} ({max(0, days_left)}d left)")
+
+    # Top suggestion
+    patterns = store.load_patterns()
+    if patterns:
+        feedback = store.load_suggestion_feedback()
+        suggestions = generate_suggestions(patterns, feedback=feedback or None)
+        if suggestions:
+            lines.append(f"Try: {suggestions[0].title}")
+
+    msg = "\n".join(lines)
     send_notification("LWM Morning Briefing", msg)
     return msg

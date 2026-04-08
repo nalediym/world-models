@@ -219,3 +219,55 @@ class TestRankingAndDedup:
 
     def test_empty_input(self):
         assert generate_suggestions([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Feedback integration
+# ---------------------------------------------------------------------------
+
+
+class TestFeedbackIntegration:
+    def test_rejected_suggestions_removed(self):
+        from datetime import datetime
+        from life_world_model.types import FeedbackAction, SuggestionFeedback
+
+        patterns = [_time_sink_pattern(), _rhythm_pattern()]
+        # First generate to get IDs
+        suggestions = generate_suggestions(patterns)
+        assert len(suggestions) >= 2
+        reject_id = suggestions[0].id
+
+        # Now reject the first one
+        feedback = [SuggestionFeedback(
+            suggestion_id=reject_id,
+            suggestion_title=suggestions[0].title,
+            action=FeedbackAction.REJECT,
+            timestamp=datetime.now(),
+        )]
+        filtered = generate_suggestions(patterns, feedback=feedback)
+        ids = [s.id for s in filtered]
+        assert reject_id not in ids
+
+    def test_accepted_suggestions_boosted(self):
+        from datetime import datetime
+        from life_world_model.types import FeedbackAction, SuggestionFeedback
+
+        patterns = [_routine_pattern()]  # produces "low" impact
+        suggestions = generate_suggestions(patterns)
+        assert suggestions[0].predicted_impact == "low"
+        accept_id = suggestions[0].id
+
+        feedback = [SuggestionFeedback(
+            suggestion_id=accept_id,
+            suggestion_title=suggestions[0].title,
+            action=FeedbackAction.ACCEPT,
+            timestamp=datetime.now(),
+        )]
+        boosted = generate_suggestions(patterns, feedback=feedback)
+        assert boosted[0].predicted_impact == "medium"  # low → medium
+
+    def test_no_feedback_is_noop(self):
+        patterns = [_time_sink_pattern()]
+        without = generate_suggestions(patterns)
+        with_empty = generate_suggestions(patterns, feedback=None)
+        assert len(without) == len(with_empty)

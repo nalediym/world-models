@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 
-from life_world_model.types import Pattern, Suggestion
+from life_world_model.types import FeedbackAction, Pattern, Suggestion, SuggestionFeedback
 
 # ---------------------------------------------------------------------------
 # Impact ranking: high > medium > low
@@ -161,10 +161,15 @@ _GENERATORS: dict[str, object] = {
 # ---------------------------------------------------------------------------
 
 
-def generate_suggestions(patterns: list[Pattern]) -> list[Suggestion]:
+def generate_suggestions(
+    patterns: list[Pattern],
+    feedback: list[SuggestionFeedback] | None = None,
+) -> list[Suggestion]:
     """Generate actionable suggestions from discovered patterns.
 
     Each suggestion is grounded in source_patterns — no suggestions without evidence.
+    If feedback is provided, rejected suggestions are deprioritized and
+    accepted suggestions get a boost.
     """
     if not patterns:
         return []
@@ -195,13 +200,34 @@ def generate_suggestions(patterns: list[Pattern]) -> list[Suggestion]:
 
     deduped = list(seen.values())
 
-    # Sort: impact (high > medium > low), then abs(score_delta) descending
-    deduped.sort(key=lambda s: (_impact_rank(s.predicted_impact), -abs(s.score_delta)))
-
     # Assign stable IDs based on title + intervention_type
     for s in deduped:
         key = f"{s.title}:{s.intervention_type}"
         s.id = hashlib.sha256(key.encode()).hexdigest()[:8]
+
+    # Apply feedback: reject → filter out, accept → boost impact
+    if feedback:
+        rejected_ids = {
+            fb.suggestion_id
+            for fb in feedback
+            if fb.action == FeedbackAction.REJECT
+        }
+        accepted_ids = {
+            fb.suggestion_id
+            for fb in feedback
+            if fb.action == FeedbackAction.ACCEPT
+        }
+        # Remove rejected suggestions
+        deduped = [s for s in deduped if s.id not in rejected_ids]
+        # Boost accepted: promote impact one level
+        for s in deduped:
+            if s.id in accepted_ids and s.predicted_impact != "high":
+                s.predicted_impact = (
+                    "high" if s.predicted_impact == "medium" else "medium"
+                )
+
+    # Sort: impact (high > medium > low), then abs(score_delta) descending
+    deduped.sort(key=lambda s: (_impact_rank(s.predicted_impact), -abs(s.score_delta)))
 
     return deduped
 

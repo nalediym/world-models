@@ -424,7 +424,8 @@ def _load_suggestions(settings, store):
     if not patterns:
         return [], "No patterns found — cannot generate suggestions yet."
 
-    suggestions = generate_suggestions(patterns)
+    feedback = store.load_suggestion_feedback()
+    suggestions = generate_suggestions(patterns, feedback=feedback or None)
     return suggestions, None
 
 

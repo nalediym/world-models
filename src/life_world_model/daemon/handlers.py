@@ -39,7 +39,7 @@ def register_all_handlers(
     bus.on(DataCollected, _make_pattern_handler(bus, settings, store), name="pattern_refresh")
     bus.on(DataCollected, _make_scorer_handler(bus, settings, store), name="scorer")
     bus.on(DataCollected, _make_experiment_handler(bus, store), name="experiment_check")
-    bus.on(PatternsUpdated, _make_suggestion_handler(bus), name="suggestion_engine")
+    bus.on(PatternsUpdated, _make_suggestion_handler(bus, store), name="suggestion_engine")
     bus.on(PatternsUpdated, _make_new_pattern_notifier(), name="new_pattern_notifier")
     bus.on(ScoreChanged, _make_score_notifier(), name="score_notifier")
     bus.on(ExperimentCompleted, _make_experiment_notifier(), name="experiment_notifier")
@@ -127,11 +127,12 @@ def _make_experiment_handler(bus: EventBus, store: SQLiteStore):
 # Suggestion handler
 # ---------------------------------------------------------------------------
 
-def _make_suggestion_handler(bus: EventBus):
+def _make_suggestion_handler(bus: EventBus, store: SQLiteStore):
     def handle(event: PatternsUpdated) -> None:
         if not event.patterns:
             return
-        suggestions = generate_suggestions(event.patterns)
+        feedback = store.load_suggestion_feedback()
+        suggestions = generate_suggestions(event.patterns, feedback=feedback or None)
         if suggestions:
             bus.emit(SuggestionsReady(suggestions=suggestions))
 
