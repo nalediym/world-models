@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from life_world_model.collectors.base import BaseCollector, register_collector
 from life_world_model.types import RawEvent
-from life_world_model.utils.timestamps import chrome_time_to_datetime
+from life_world_model.utils.timestamps import CHROME_EPOCH, chrome_time_to_datetime
 
 
 def resolve_domain(url: str | None) -> str | None:
@@ -35,8 +35,8 @@ class ChromeHistoryCollector(BaseCollector):
 
         start = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        start_us = int((start - EPOCH_START).total_seconds() * 1_000_000)
-        end_us = int((end - EPOCH_START).total_seconds() * 1_000_000)
+        start_us = int((start - CHROME_EPOCH).total_seconds() * 1_000_000)
+        end_us = int((end - CHROME_EPOCH).total_seconds() * 1_000_000)
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as temp_file:
             temp_path = Path(temp_file.name)

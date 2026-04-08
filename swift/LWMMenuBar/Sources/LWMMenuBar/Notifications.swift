@@ -54,4 +54,35 @@ enum LWMNotifications {
             identifier: "experiment-complete"
         )
     }
+
+    /// Schedule a daily morning briefing notification at a given hour.
+    /// The notification body is generic — the full briefing is in the popover.
+    static func scheduleMorningBriefing(hour: Int = 9, minute: Int = 0) {
+        let center = UNUserNotificationCenter.current()
+
+        // Remove any existing briefing schedule
+        center.removePendingNotificationRequests(withIdentifiers: ["morning-briefing"])
+
+        let content = UNMutableNotificationContent()
+        content.title = "LWM Morning Briefing"
+        content.body = "Your daily summary is ready. Open the menu bar to review."
+        content.sound = .default
+
+        var dateComponents = DateComponents()
+        dateComponents.hour = hour
+        dateComponents.minute = minute
+
+        let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
+        let request = UNNotificationRequest(
+            identifier: "morning-briefing",
+            content: content,
+            trigger: trigger
+        )
+
+        center.add(request) { error in
+            if let error {
+                print("[notifications] Briefing schedule error: \(error)")
+            }
+        }
+    }
 }

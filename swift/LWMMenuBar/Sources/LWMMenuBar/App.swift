@@ -10,6 +10,8 @@ struct LWMMenuBarApp: App {
         } label: {
             HStack(spacing: 2) {
                 Image(systemName: "brain.head.profile")
+                    .symbolEffect(.pulse, options: .repeating,
+                                  isActive: viewModel.scoreJustChanged)
                 Text(viewModel.gradeText)
                     .font(.caption.monospacedDigit())
             }

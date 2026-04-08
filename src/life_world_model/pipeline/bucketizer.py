@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from life_world_model.types import LifeState, RawEvent
 
 
 def floor_to_bucket(timestamp: datetime, bucket_minutes: int) -> datetime:
+    # Normalize naive timestamps to UTC to avoid naive/aware comparison errors
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
     floored_minute = (timestamp.minute // bucket_minutes) * bucket_minutes
     return timestamp.replace(minute=floored_minute, second=0, microsecond=0)
 

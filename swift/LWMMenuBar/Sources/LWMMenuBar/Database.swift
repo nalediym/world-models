@@ -83,6 +83,15 @@ struct SuggestionFeedback: Codable, FetchableRecord, TableRecord {
     }
 }
 
+// MARK: - Timeline Bucket
+
+struct TimelineBucket {
+    let hour: Int
+    let minute: Int  // 0, 15, 30, 45
+    let eventCount: Int
+    let primarySource: String  // most common source in this bucket
+}
+
 // MARK: - Database Reader
 
 final class LWMDatabase: Sendable {
@@ -98,6 +107,12 @@ final class LWMDatabase: Sendable {
     static var defaultPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Projects/world-models/data/raw/life_world_model.sqlite3"
+    }
+
+    /// Project root for shelling out to lwm CLI
+    static var projectPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Projects/world-models"
     }
 
     // MARK: - Queries
@@ -146,6 +161,51 @@ final class LWMDatabase: Sendable {
         }
     }
 
+    /// Query raw_events for today, group by 15-min windows.
+    /// Returns buckets with event counts and primary source.
+    func todayTimeline() throws -> [TimelineBucket] {
+        let today = Self.todayPrefix()
+        return try dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT
+                    CAST(strftime('%H', timestamp) AS INTEGER) AS hour,
+                    (CAST(strftime('%M', timestamp) AS INTEGER) / 15) * 15 AS minute,
+                    source,
+                    COUNT(*) AS cnt
+                FROM raw_events
+                WHERE timestamp >= ?
+                GROUP BY hour, minute, source
+                ORDER BY hour, minute, cnt DESC
+                """, arguments: [today])
+
+            // Group by (hour, minute) and pick primary source (highest count)
+            var bucketMap: [String: (count: Int, sourceCounts: [String: Int])] = [:]
+            for row in rows {
+                let h: Int = row["hour"]
+                let m: Int = row["minute"]
+                let source: String = row["source"]
+                let cnt: Int = row["cnt"]
+                let key = "\(h):\(m)"
+
+                if var existing = bucketMap[key] {
+                    existing.count += cnt
+                    existing.sourceCounts[source, default: 0] += cnt
+                    bucketMap[key] = existing
+                } else {
+                    bucketMap[key] = (count: cnt, sourceCounts: [source: cnt])
+                }
+            }
+
+            return bucketMap.map { key, value in
+                let parts = key.split(separator: ":")
+                let h = Int(parts[0])!
+                let m = Int(parts[1])!
+                let primary = value.sourceCounts.max(by: { $0.value < $1.value })?.key ?? "unknown"
+                return TimelineBucket(hour: h, minute: m, eventCount: value.count, primarySource: primary)
+            }.sorted { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
+        }
+    }
+
     /// Compute a rough day score: productive events / total events
     /// (Simplified version — the real scoring happens in Python)
     func todayProductiveRatio() throws -> Double {
@@ -173,5 +233,39 @@ final class LWMDatabase: Sendable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
+    }
+}
+
+// MARK: - CLI Command Runner
+
+/// Runs lwm CLI commands via uv and returns stdout.
+/// All heavy computation stays in Python — Swift just shells out.
+enum LWMCommandRunner {
+
+    /// Run a lwm CLI command and return its stdout.
+    @discardableResult
+    static func run(_ args: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["uv", "run", "--project", LWMDatabase.projectPath,
+                             "python", "-m", "life_world_model.cli"] + args
+        process.currentDirectoryURL = URL(fileURLWithPath: LWMDatabase.projectPath)
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Run a lwm CLI command asynchronously off the main thread.
+    static func runAsync(_ args: [String]) async throws -> String {
+        try await Task.detached {
+            try run(args)
+        }.value
     }
 }
