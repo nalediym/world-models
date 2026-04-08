@@ -1,0 +1,917 @@
+# Daemon Architecture: 30 System Design Patterns
+
+> Each diagram shows how the LWM daemon coordinates:
+> **data collected -> patterns discovered -> suggestions generated -> notification sent**
+> With fan-out to experiment check + scoring, and pattern-triggered suggestion regeneration.
+
+---
+
+## 1. Event Bus / Pub-Sub
+
+> Key: Decoupled producers and consumers communicate through a shared bus; any component can subscribe to any event topic.
+
+```
+  ┌──────────┐  publish   ┌─────────────────────────────────────┐
+  │ Collector │──────────►│           EVENT BUS                  │
+  └──────────┘            │  topics: data.new, pattern.updated,  │
+                          │  suggestion.ready, score.updated     │
+                          └──┬────┬────┬────┬────┬────┬────┬────┘
+                subscribe    │    │    │    │    │    │    │
+           ┌─────────────────┘    │    │    │    │    │    └──────────────┐
+           ▼                      ▼    │    ▼    │    ▼                   ▼
+  ┌──────────────┐  ┌──────────┐ │ ┌────────┐  │ ┌───────────┐  ┌────────────┐
+  │ PatternEngine│  │ Scorer   │ │ │Suggest │  │ │ Notifier  │  │ Experiment │
+  │  (data.new)  │  │(data.new)│ │ │Engine  │  │ │(suggest.  │  │  Checker   │
+  └──────┬───────┘  └──────────┘ │ │(pattern│  │ │ ready +   │  │ (data.new) │
+         │ publish                │ │.updated│  │ │  pattern. │  └────────────┘
+         │ pattern.updated        │ │)       │  │ │  updated) │
+         └────────────────────────┘ └───┬────┘  │ └───────────┘
+                                        │       │
+                                        └───────┘
+                                    publish suggestion.ready
+```
+
+---
+
+## 2. Observer Pattern (GoF)
+
+> Key: Subjects maintain a list of observers and notify them directly on state change; tight coupling between subject and observer interfaces.
+
+```
+  ┌──────────────────────────────────────────────────────────┐
+  │                   Collector (Subject)                     │
+  │  observers: [PatternEngine, Scorer, ExperimentChecker]   │
+  └─────┬──────────────────┬──────────────────┬──────────────┘
+        │ notify()         │ notify()         │ notify()
+        ▼                  ▼                  ▼
+  ┌──────────────┐  ┌──────────┐      ┌──────────────┐
+  │ PatternEngine│  │  Scorer  │      │  Experiment  │
+  │  (Subject)   │  └──────────┘      │   Checker    │
+  │  observers:  │                    └──────────────┘
+  │  [Suggest,   │
+  │   Notifier]  │
+  └──┬───────┬───┘
+     │       │ notify()
+     ▼       ▼
+  ┌────────┐ ┌──────────────┐
+  │Suggest │ │   Notifier   │
+  │Engine  │ │  (Observer)  │
+  │(Subject│ └──────────────┘
+  │)       │         ▲
+  └───┬────┘         │ notify()
+      └──────────────┘
+```
+
+---
+
+## 3. Mediator Pattern
+
+> Key: A central mediator object encapsulates all interaction logic; components never talk to each other directly.
+
+```
+  ┌───────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+  │ Collector  │   │ Pattern  │   │ Suggest  │   │ Notifier │   │  Scorer  │
+  └─────┬──────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
+        │                │              │              │              │
+        │  dataReady()   │              │              │              │
+        └───────►┌───────┴──────────────┴──────────────┴──────────────┴──┐
+                 │                  DAEMON MEDIATOR                       │
+                 │  on dataReady:                                        │
+                 │    ─► patternEngine.discover()                        │
+                 │    ─► scorer.score()                                  │
+                 │    ─► experimentChecker.check()                       │
+                 │  on patternsUpdated:                                  │
+                 │    ─► suggestEngine.regenerate()                      │
+                 │    ─► notifier.sendPatternAlert()                     │
+                 │  on suggestionsReady:                                 │
+                 │    ─► notifier.sendSuggestions()                      │
+                 └───────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Actor Model
+
+> Key: Each component is an isolated actor with its own mailbox; communication is purely asynchronous message passing with no shared state.
+
+```
+  ┌─────────────────┐  {data_collected}   ┌──────────────────┐
+  │  CollectorActor  │───────────────────►│  PatternActor     │
+  │  mailbox: [...]  │───┐                │  mailbox: [...]   │
+  └──────────────────┘   │                └────┬─────────┬────┘
+                         │                     │         │
+                         │ {data_collected}    │         │ {patterns_updated}
+                         ▼                     │         ▼
+                  ┌────────────┐               │  ┌──────────────┐
+                  │ ScorerActor│               │  │ SuggestActor │
+                  │ mailbox:[] │               │  │ mailbox:[]   │
+                  └────────────┘               │  └──────┬───────┘
+                         ▲                     │         │
+                  {data_collected}              │   {suggestions_ready}
+                         │                     │         │
+                  ┌──────┴───────┐             │         ▼
+                  │  Experiment  │             │  ┌──────────────┐
+                  │  Actor       │             └─►│NotifierActor │
+                  │  mailbox:[]  │                │ mailbox:[]   │
+                  └──────────────┘                └──────────────┘
+```
+
+---
+
+## 5. Pipeline / DAG
+
+> Key: Processing stages form a directed acyclic graph; data flows forward through defined edges with explicit fan-out at branch points.
+
+```
+                          ┌───────────────┐
+                          │   Collector    │
+                          └───────┬───────┘
+                     ┌────────────┼────────────┐
+                     ▼            ▼            ▼
+              ┌────────────┐ ┌────────┐ ┌────────────┐
+              │  Pattern   │ │ Scorer │ │ Experiment │
+              │  Discovery │ │        │ │  Checker   │
+              └──────┬─────┘ └────────┘ └────────────┘
+                ┌────┴────┐
+                ▼         ▼
+          ┌──────────┐ ┌──────────────┐
+          │ Suggest  │ │  Pattern     │
+          │ Engine   │ │  Notifier    │
+          └────┬─────┘ └──────────────┘
+               ▼
+          ┌──────────────┐
+          │  Suggestion  │
+          │  Notifier    │
+          └──────────────┘
+```
+
+---
+
+## 6. Reactive Streams
+
+> Key: Backpressure-aware streams with publishers, subscribers, and processors; each stage requests only as much data as it can handle.
+
+```
+  ┌──────────┐  Stream<Event>   ┌───────────────┐  Stream<Pattern>  ┌──────────┐
+  │Collector │─────────────────►│PatternProcessor│─────────────────►│ Suggest  │
+  │Publisher │  request(n)◄─────│  (Processor)   │  request(n)◄─────│Processor │
+  └──────┬───┘                  └───────┬────────┘                  └────┬─────┘
+         │                              │                                │
+         │ Stream<Event>                │ Stream<Pattern>                │ Stream<Suggestion>
+         │ (fan-out)                    │ (fan-out)                      │
+         ▼                              ▼                                ▼
+  ┌────────────┐              ┌───────────────┐                ┌──────────────┐
+  │ScorerSub   │              │PatternNotify  │                │SuggestNotify │
+  │+ Experiment│              │  Subscriber   │                │  Subscriber  │
+  │ Subscriber │              └───────────────┘                └──────────────┘
+  └────────────┘
+```
+
+---
+
+## 7. State Machine
+
+> Key: The daemon transitions through discrete states; each transition triggers specific actions, ensuring ordering and preventing invalid operation sequences.
+
+```
+  ┌──────────┐  data arrives   ┌────────────┐  analysis done  ┌────────────┐
+  │  IDLE    │────────────────►│ COLLECTING │───────────────►│ ANALYZING  │
+  └──────────┘                 └────────────┘                └─────┬──────┘
+       ▲                                                          │
+       │                                      ┌───────────────────┼──────────────┐
+       │                                      ▼                   ▼              ▼
+       │                               ┌────────────┐   ┌──────────┐   ┌────────────┐
+       │                               │ DISCOVERING│   │ SCORING  │   │ EXPERIMENT │
+       │                               │ PATTERNS   │   │          │   │ CHECKING   │
+       │                               └─────┬──────┘   └──────────┘   └────────────┘
+       │                                     │
+       │                          ┌──────────┴──────────┐
+       │                          ▼                     ▼
+       │                   ┌────────────┐       ┌──────────────┐
+       │                   │ SUGGESTING │       │  NOTIFYING   │
+       │ all complete      │            │──────►│  (patterns)  │
+       └───────────────────┤            │       └──────────────┘
+                           └─────┬──────┘
+                                 ▼
+                          ┌──────────────┐
+                          │  NOTIFYING   │
+                          │(suggestions) │
+                          └──────────────┘
+```
+
+---
+
+## 8. Scheduler with Hooks
+
+> Key: A central scheduler fires at configured intervals; lifecycle hooks (before/after each phase) allow injecting custom behavior.
+
+```
+  ┌────────────────────────────────────────────────────────────┐
+  │                     CRON SCHEDULER                          │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+  │  │ hourly   │  │ 15-min   │  │ daily    │  │ on-demand│  │
+  │  │ collect  │  │ patterns │  │ briefing │  │ simulate │  │
+  │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
+  └───────┼──────────────┼────────────┼──────────────┼────────┘
+          ▼              ▼            ▼              ▼
+     before_hook    before_hook  before_hook    before_hook
+          │              │            │              │
+     ┌────┴────┐    ┌────┴───┐  ┌────┴─────┐  ┌────┴──────┐
+     │Collect  │    │Pattern │  │ Score +  │  │ Simulate  │
+     │+ Score  │    │Discover│  │ Suggest  │  │ + Notify  │
+     │+ Exper. │    │+ Notify│  │ + Notify │  │           │
+     └────┬────┘    └────┬───┘  └────┬─────┘  └────┬──────┘
+          │              │            │              │
+     after_hook     after_hook   after_hook    after_hook
+```
+
+---
+
+## 9. Blackboard Architecture
+
+> Key: A shared knowledge store (blackboard) holds all state; independent knowledge sources read/write to it, and a controller decides which source to activate next.
+
+```
+  ┌───────────────────────────────────────────────────────────────┐
+  │                     BLACKBOARD (shared state)                  │
+  │  ┌───────────┐ ┌──────────┐ ┌───────────┐ ┌───────────────┐  │
+  │  │raw_events │ │patterns  │ │suggestions│ │scores, experi.│  │
+  │  │           │ │          │ │           │ │               │  │
+  │  └───────────┘ └──────────┘ └───────────┘ └───────────────┘  │
+  └──────┬──────────────┬──────────────┬──────────────┬──────────┘
+         │ read/write   │ read/write   │ read/write   │ read/write
+         ▼              ▼              ▼              ▼
+  ┌────────────┐ ┌────────────┐ ┌──────────┐ ┌──────────────────┐
+  │ Collector  │ │  Pattern   │ │ Suggest  │ │Scorer + Exper.   │
+  │  KS        │ │  KS        │ │  KS      │ │ KS               │
+  └────────────┘ └────────────┘ └──────────┘ └──────────────────┘
+         ▲              ▲              ▲              ▲
+         └──────────────┴──────────────┴──────────────┘
+                          │
+                   ┌──────┴───────┐
+                   │  Controller  │  (decides activation order)
+                   │  + Notifier  │
+                   └──────────────┘
+```
+
+---
+
+## 10. Command Queue
+
+> Key: All operations are serialized as command objects in a FIFO queue; a single executor processes them in order, enabling undo/replay.
+
+```
+  ┌──────────┐     ┌──────────────────────────────────────────────┐
+  │Collector │────►│              COMMAND QUEUE (FIFO)             │
+  └──────────┘     │                                              │
+                   │ [CollectCmd, DiscoverCmd, ScoreCmd,           │
+                   │  ExperimentCmd, SuggestCmd, NotifyCmd, ...]   │
+                   └──────────────────────┬───────────────────────┘
+                                          │ dequeue
+                                          ▼
+                                   ┌──────────────┐
+                                   │   Executor   │
+                                   └──────┬───────┘
+                          ┌───────────────┼───────────────┐
+                          ▼               ▼               ▼
+                   ┌────────────┐  ┌──────────┐   ┌──────────────┐
+                   │  execute() │  │ execute()│   │  execute()   │
+                   │ CollectCmd │  │ ScoreCmd │   │  NotifyCmd   │
+                   │  enqueues  │  │          │   │              │
+                   │ DiscoverCmd│  └──────────┘   └──────────────┘
+                   │ + ScoreCmd │
+                   │ + Exper.Cmd│
+                   └────────────┘
+```
+
+---
+
+## 11. Tuple Spaces (Linda)
+
+> Key: Components communicate by writing and reading tuples from a shared associative space; consumers pattern-match on tuple structure.
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │                     TUPLE SPACE                               │
+  │                                                              │
+  │  ("event", "chrome", ts, data)                               │
+  │  ("pattern", "morning_routine", confidence, evidence)        │
+  │  ("suggestion", "block_news_9am", priority)                  │
+  │  ("score", "2026-04-07", 8.2)                                │
+  │  ("experiment", "early_code", status)                        │
+  └──┬────────┬────────┬────────┬────────┬────────┬──────────────┘
+     │ out()  │ rd()   │ rd()   │ in()   │ rd()   │ in()
+     ▼        ▼        ▼        ▼        ▼        ▼
+  ┌──────┐ ┌───────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌────────┐
+  │Collec│ │Pattern│ │Scorer│ │Notif.│ │Sugg. │ │Exper.  │
+  │tor   │ │Engine │ │      │ │      │ │Engine│ │Checker │
+  │out() │ │rd+out │ │rd+out│ │in()  │ │rd+out│ │rd+out  │
+  └──────┘ └───────┘ └──────┘ └──────┘ └──────┘ └────────┘
+```
+
+---
+
+## 12. CSP / Channels
+
+> Key: Goroutine-style concurrent processes communicate through typed, bounded channels; sends block until a receiver is ready.
+
+```
+  ┌──────────┐                              ┌──────────┐
+  │Collector │──► ch_events ──┬────────────►│ Pattern  │
+  │ Process  │                │             │ Process  │──► ch_patterns ──┐
+  └──────────┘                │             └──────────┘                  │
+                              │                                     ┌────┴────┐
+                              ├────────────►┌──────────┐            │         │
+                              │             │  Scorer  │            ▼         ▼
+                              │             │ Process  │     ┌──────────┐ ┌────────┐
+                              │             └──────────┘     │ Suggest  │ │Pattern │
+                              │                              │ Process  │ │Notifier│
+                              └────────────►┌──────────┐     └────┬─────┘ └────────┘
+                                            │Experiment│          │
+                                            │ Process  │          ▼
+                                            └──────────┘   ch_suggestions
+                                                                  │
+                                                                  ▼
+                                                           ┌──────────┐
+                                                           │ Notifier │
+                                                           │ Process  │
+                                                           └──────────┘
+```
+
+---
+
+## 13. Coroutine Pipelines
+
+> Key: Python async generators yield data downstream; each stage is a coroutine that consumes from one generator and yields to the next.
+
+```
+  async def collect():          async def discover():        async def suggest():
+    while True:                   async for events in         async for patterns in
+      events = await poll()         collect():                  discover():
+      yield events          ─►     patterns = analyze()  ─►    suggestions = gen()
+                                    yield patterns              yield suggestions
+                                    │                                │
+                    ┌───────────────┘                                │
+                    ▼                                                ▼
+            async def score():                             async def notify():
+              async for events in                            async for item in
+                collect():                                     merge(suggest(),
+                score = calc()                                   pattern_alerts()):
+                yield score                                    send(item)
+
+            async def experiment():
+              async for events in
+                collect():
+                check_experiments()
+```
+
+---
+
+## 14. Rule Engine
+
+> Key: Declarative if-then rules fire when conditions match working memory; the engine decides execution order via conflict resolution.
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │                     WORKING MEMORY                           │
+  │  facts: [new_data, patterns[], scores[], experiments[]]     │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │ match
+                             ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                      RULE ENGINE                             │
+  │                                                             │
+  │  R1: IF new_data          THEN run_pattern_discovery()      │
+  │  R2: IF new_data          THEN run_scoring()                │
+  │  R3: IF new_data          THEN check_experiments()          │
+  │  R4: IF patterns_updated  THEN regenerate_suggestions()     │
+  │  R5: IF patterns_updated  THEN notify_new_patterns()        │
+  │  R6: IF suggestions_ready THEN notify_suggestions()         │
+  │                                                             │
+  │  conflict resolution: priority + recency                    │
+  └────────────────────────────┬────────────────────────────────┘
+                               │ fire
+                               ▼
+                        ┌──────────────┐
+                        │   Actions    │
+                        │ (modify      │
+                        │  working     │
+                        │  memory)     │
+                        └──────────────┘
+```
+
+---
+
+## 15. Middleware Chain
+
+> Key: Request flows through a chain of middleware functions; each can transform, short-circuit, or pass to the next handler in the stack.
+
+```
+  ┌──────────┐
+  │  Event   │
+  │ (input)  │
+  └────┬─────┘
+       ▼
+  ┌────────────────┐   next()   ┌────────────────┐   next()   ┌────────────────┐
+  │  MW: Collect   │──────────►│  MW: Discover   │──────────►│  MW: Suggest   │
+  │  + fan-out to  │           │  Patterns       │           │  Engine        │
+  │  Score,Exper.  │           │  + fan-out to   │           │                │
+  └────────────────┘           │  PatternNotify  │           └───────┬────────┘
+                               └─────────────────┘                   │ next()
+                                                                     ▼
+       ┌──────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  ┌────────────────┐   next()   ┌────────────────┐
+  │  MW: Notify    │──────────►│  MW: Log &     │
+  │  Suggestions   │           │  Persist       │
+  └────────────────┘           └────────────────┘
+```
+
+---
+
+## 16. Event Sourcing
+
+> Key: All state changes are stored as an immutable append-only log of events; current state is derived by replaying the log.
+
+```
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                    EVENT STORE (append-only log)                  │
+  │  [DataCollected, PatternFound, ScoreComputed, ExperimentChecked, │
+  │   SuggestionGenerated, NotificationSent, PatternFound, ...]      │
+  └────────────────────────────┬─────────────────────────────────────┘
+                               │ subscribe / replay
+              ┌────────────────┼────────────────┬───────────────┐
+              ▼                ▼                ▼               ▼
+       ┌────────────┐  ┌────────────┐  ┌──────────┐   ┌──────────────┐
+       │  Pattern   │  │  Scoring   │  │ Suggest  │   │  Notification│
+       │ Projection │  │ Projection │  │Projection│   │  Projection  │
+       │ (rebuild   │  │ (rebuild   │  │(rebuild  │   │  (rebuild    │
+       │  from log) │  │  from log) │  │ from log)│   │   from log)  │
+       └────────────┘  └────────────┘  └──────────┘   └──────────────┘
+                                                              │
+                  New events from projections ─────────►  appended
+                  back to event store                     to log
+```
+
+---
+
+## 17. CQRS
+
+> Key: Command (write) and Query (read) paths are completely separated; writes go through command handlers, reads come from optimized projections.
+
+```
+          COMMAND SIDE                          QUERY SIDE
+  ┌─────────────────────────┐          ┌─────────────────────────┐
+  │   CollectDataCommand    │          │  GetPatternsQuery       │
+  │   DiscoverPatternCmd    │          │  GetScoreQuery          │
+  │   GenerateSuggestionCmd │          │  GetSuggestionsQuery    │
+  │   CheckExperimentCmd    │          │  GetNotificationsQuery  │
+  └───────────┬─────────────┘          └──────────┬──────────────┘
+              │                                   │
+              ▼                                   ▼
+  ┌───────────────────┐  sync/event  ┌───────────────────────┐
+  │  Command Handlers │─────────────►│   Read Projections    │
+  │  (validate +      │              │   (denormalized,      │
+  │   write to store) │              │    optimized views)   │
+  └─────────┬─────────┘              └───────────────────────┘
+            │                                   ▲
+            ▼                                   │ rebuild
+  ┌───────────────────┐                         │
+  │   Event Store     │─────────────────────────┘
+  │   (single source  │  projection events
+  │    of truth)      │
+  └───────────────────┘
+```
+
+---
+
+## 18. Saga Pattern
+
+> Key: A long-running transaction is split into local steps with compensating actions; if any step fails, previous steps are rolled back.
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │                      SAGA ORCHESTRATOR                        │
+  └──┬──────────┬───────────┬───────────┬───────────┬────────────┘
+     │ step 1   │ step 2    │ step 3    │ step 4    │ step 5
+     ▼          ▼           ▼           ▼           ▼
+  ┌───────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
+  │Collect│ │Discover│ │ Score  │ │Suggest │ │ Notify   │
+  │ Data  │ │Pattern │ │+ Exper.│ │        │ │          │
+  └───┬───┘ └───┬────┘ └───┬────┘ └───┬────┘ └──────────┘
+      │         │           │          │
+      │ fail?   │ fail?     │ fail?    │ fail?
+      ▼         ▼           ▼          ▼
+  ┌───────┐ ┌────────┐ ┌────────┐ ┌────────┐
+  │Undo   │ │Undo    │ │Undo    │ │Undo    │  (compensating
+  │Collect│ │Pattern │ │Score   │ │Suggest │   actions)
+  └───────┘ └────────┘ └────────┘ └────────┘
+```
+
+---
+
+## 19. Hierarchical Task Network
+
+> Key: High-level tasks decompose into subtask trees; the planner recursively expands abstract tasks into primitive executable actions.
+
+```
+                    ┌──────────────────────┐
+                    │  RunDaemonCycle      │  (abstract task)
+                    └──────────┬───────────┘
+               ┌───────────────┼───────────────┐
+               ▼               ▼               ▼
+        ┌────────────┐  ┌───────────┐  ┌─────────────┐
+        │ Ingest     │  │ Analyze   │  │ Act         │
+        │ (abstract) │  │ (abstract)│  │ (abstract)  │
+        └──────┬─────┘  └─────┬─────┘  └──────┬──────┘
+               │              │                │
+          ┌────┘         ┌────┼────┐      ┌────┼────┐
+          ▼              ▼    ▼    ▼      ▼    ▼    ▼
+       ┌──────┐   ┌─────┐ ┌────┐┌────┐ ┌────┐┌────┐┌──────┐
+       │Collec│   │Disco│ │Scor││Exp.│ │Sugg││Noti││Notify│
+       │t     │   │ver  │ │e   ││rmt.│ │est ││fy  ││Sugg. │
+       │(prim)│   │(pri)│ │(pr)││(pr)│ │(pr)││Pat.││(prim)│
+       └──────┘   └─────┘ └────┘└────┘ └────┘└────┘└──────┘
+```
+
+---
+
+## 20. Plugin + Hooks
+
+> Key: A minimal core exposes lifecycle hooks; plugins register callbacks that extend behavior without modifying the core.
+
+```
+  ┌────────────────────────────────────────────────────────────────┐
+  │                      DAEMON CORE                                │
+  │                                                                │
+  │  hook: on_data_collected ──► [plugin_a.discover, plugin_b.score,│
+  │                               plugin_c.experiment]              │
+  │  hook: on_patterns_updated ─► [plugin_d.suggest,                │
+  │                                plugin_e.notify_pattern]         │
+  │  hook: on_suggestions_ready ► [plugin_f.notify_suggest]         │
+  │                                                                │
+  └────────────────────────────────────────────────────────────────┘
+         │              │              │              │
+         ▼              ▼              ▼              ▼
+  ┌────────────┐ ┌────────────┐ ┌──────────┐ ┌──────────────┐
+  │ Plugin A:  │ │ Plugin B:  │ │Plugin D: │ │ Plugin F:    │
+  │ Pattern    │ │ Scorer     │ │ Suggest  │ │ Notifier     │
+  │ Discovery  │ │            │ │ Engine   │ │              │
+  └────────────┘ └────────────┘ └──────────┘ └──────────────┘
+```
+
+---
+
+## 21. Flow-Based Programming
+
+> Key: Application is a network of black-box processes connected by buffered ports; data packets travel along named connections.
+
+```
+  ┌──────────┐  OUT─►IN  ┌──────────┐  OUT─►IN  ┌──────────┐
+  │Collector │══════════►│ Pattern  │══════════►│ Suggest  │
+  │          │  SCORE─►  │ Discover │  ALERT─►  │ Engine   │
+  └──────┬───┘     │     └──────────┘     │     └────┬─────┘
+         │         │                      │          │
+         │ SCORE   │               ALERT  │     NOTIFY
+         ▼         ▼                      ▼          ▼
+  ┌────────────┐  ┌──────────┐   ┌──────────┐  ┌──────────┐
+  │  Scorer    │  │Experiment│   │ Pattern  │  │Suggestion│
+  │  Process   │  │ Checker  │   │ Notifier │  │ Notifier │
+  └────────────┘  │ Process  │   └──────────┘  └──────────┘
+                  └──────────┘
+
+  ══════ = buffered connection (Information Packet stream)
+```
+
+---
+
+## 22. Dataflow / Spreadsheet Model
+
+> Key: Cells hold values or formulas; when an upstream cell changes, all dependent cells automatically recompute, like a spreadsheet.
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │                   DATAFLOW GRAPH                              │
+  │                                                              │
+  │  [A] raw_events = collect()              ← input cell        │
+  │       │                                                      │
+  │       ├──► [B] patterns = discover(A)    ← recomputes on A   │
+  │       ├──► [C] score = calc_score(A)     ← recomputes on A   │
+  │       └──► [D] experiment = check(A)     ← recomputes on A   │
+  │                                                              │
+  │  [B] ─├──► [E] suggestions = suggest(B)  ← recomputes on B   │
+  │       └──► [F] notify_pattern(B)         ← recomputes on B   │
+  │                                                              │
+  │  [E] ────► [G] notify_suggest(E)         ← recomputes on E   │
+  │                                                              │
+  │  Change A ─► B,C,D recompute ─► E,F recompute ─► G fires    │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 23. Signal/Slot (Qt-style)
+
+> Key: Objects emit named signals; slots (methods) are connected to signals at runtime; one signal can connect to many slots.
+
+```
+  ┌──────────────────────┐
+  │      Collector       │
+  │                      │
+  │  signal: dataReady ──┼──► connect ──► PatternEngine.onData()     (slot)
+  │                      │──► connect ──► Scorer.onData()            (slot)
+  │                      │──► connect ──► ExperimentChecker.onData() (slot)
+  └──────────────────────┘
+
+  ┌──────────────────────┐
+  │    PatternEngine     │
+  │                      │
+  │  signal: patternsUpdated ──► connect ──► SuggestEngine.onPatterns() (slot)
+  │                            ──► connect ──► Notifier.onPatterns()    (slot)
+  └──────────────────────┘
+
+  ┌──────────────────────┐
+  │    SuggestEngine     │
+  │                      │
+  │  signal: suggestionsReady ──► connect ──► Notifier.onSuggestions()  (slot)
+  └──────────────────────┘
+```
+
+---
+
+## 24. Functional Reactive Programming
+
+> Key: Time-varying values (behaviors) and discrete event streams are composed with pure functional combinators like map, filter, merge, and scan.
+
+```
+  events$  = fromCollector()
+       │
+       ├──► patterns$  = events$.pipe( bufferTime(15m), map(discover) )
+       ├──► scores$    = events$.pipe( map(score) )
+       └──► experiments$ = events$.pipe( filter(hasExperiment), map(check) )
+
+  patterns$
+       ├──► suggestions$ = patterns$.pipe( switchMap(generateSuggestions) )
+       └──► patternNotif$ = patterns$.pipe( map(formatAlert) )
+
+  notifications$ = merge(
+      suggestions$.pipe( map(formatSuggestion) ),
+      patternNotif$
+  ).pipe( throttleTime(5m) )
+
+  notifications$.subscribe(send)
+
+  ─────── time ──────────────────────────────────────────────►
+  events$:       ──e──e──e──────e──e──────e──e──e──────►
+  patterns$:     ─────────P──────────P──────────────P──►
+  suggestions$:  ─────────────S────────────S────────────►
+  notifications$:─────────N───N────────N───N───────N───►
+```
+
+---
+
+## 25. Pi-Calculus
+
+> Key: Processes communicate by sending channel names over channels; communication topology can change dynamically at runtime.
+
+```
+  Collector(out) =                    PatternEngine(in, suggestCh, notifyCh) =
+    new data.                           in?(events).
+    out!<data>.                         let patterns = discover(events).
+    Collector(out)                      suggestCh!<patterns>.
+                                        notifyCh!<patterns>.
+                                        PatternEngine(in, suggestCh, notifyCh)
+
+  ┌───────────┐  ch_a   ┌──────────────┐  ch_b   ┌──────────┐
+  │ Collector │──!────►│ PatternEngine │──!────►│ Suggest  │
+  └─────┬─────┘        └──────┬────────┘        └────┬─────┘
+        │ ch_a                │ ch_c                  │ ch_d
+        │ (name passing)      │                       │
+        ▼                     ▼                       ▼
+  ┌──────────┐         ┌──────────┐            ┌──────────┐
+  │ Scorer + │         │ Pattern  │            │ Suggest  │
+  │Experiment│         │ Notifier │            │ Notifier │
+  └──────────┘         └──────────┘            └──────────┘
+
+  Channels are first-class: Collector can send ch_a to a new
+  process, dynamically rewiring the topology.
+```
+
+---
+
+## 26. Petri Nets
+
+> Key: Places hold tokens, transitions fire when all input places have tokens; concurrency and synchronization are modeled by token flow.
+
+```
+  (P0)            T0            (P1)          (P2)          (P3)
+  ●───────────►┌──────┐──────►○──────────►  ○              ○
+  data_ready   │Collect│       collected    patterns_done   scored
+               └──────┘──────►○
+                               experiment_checked
+                    │
+         ┌──────────┴──────────┐
+         ▼                     ▼
+  (P1)●──────►┌────────┐  (P1)●──────►┌──────┐
+              │Discover│               │Score │──────►(P3)●
+              │Patterns│               │+Expt │
+              └───┬────┘               └──────┘
+                  │
+              (P2)●──────►┌────────┐──────►(P4)○ suggestions_ready
+                          │Suggest │
+                          └────────┘
+                               │
+  (P2)●──────►┌──────────┐    │
+              │NotifyPat.│    (P4)●──────►┌──────────┐──────►(P5)○ done
+              └──────────┘                │NotifySug.│
+                                          └──────────┘
+
+  ● = token present (ready)    ○ = place empty (waiting)
+```
+
+---
+
+## 27. CPS / Callback Hell
+
+> Key: Each operation takes a continuation (callback) that is invoked with the result; nesting creates the characteristic "pyramid of doom."
+
+```
+  collect(date, function(err, events) {
+  │  if (err) return handleError(err);
+  │
+  │  discoverPatterns(events, function(err, patterns) {
+  │  │  if (err) return handleError(err);
+  │  │
+  │  │  generateSuggestions(patterns, function(err, suggestions) {
+  │  │  │  if (err) return handleError(err);
+  │  │  │
+  │  │  │  notifySuggestions(suggestions, function(err) {
+  │  │  │  │  // done
+  │  │  │  });
+  │  │  });
+  │  │
+  │  │  notifyPatterns(patterns, function(err) { /* fire-and-forget */ });
+  │  });
+  │
+  │  scoreDay(events, function(err, score) { /* parallel callback */ });
+  │  checkExperiments(events, function(err) { /* parallel callback */ });
+  });
+```
+
+---
+
+## 28. Promise/Future Chain
+
+> Key: Asynchronous operations return promise objects that can be chained with .then(); fan-out uses Promise.all().
+
+```
+  collect(date)
+       │
+       ├──.then(events)──► Promise.all([
+       │                      discoverPatterns(events),
+       │                      scoreDay(events),
+       │                      checkExperiments(events)
+       │                   ])
+       │                      │
+       │                      ├──.then([patterns, score, experiments])
+       │                      │     │
+       │                      │     ├──► Promise.all([
+       │                      │     │      generateSuggestions(patterns),
+       │                      │     │      notifyPatterns(patterns)
+       │                      │     │    ])
+       │                      │     │        │
+       │                      │     │        ├──.then([suggestions, _])
+       │                      │     │        │     │
+       │                      │     │        │     └──► notifySuggestions(suggestions)
+       │                      │     │        │
+       │                      │     .catch(── handleError ──)
+       │
+       .catch(── handleError ──)
+```
+
+---
+
+## 29. AOP / Decorators
+
+> Key: Cross-cutting concerns (logging, timing, error handling) are applied as decorators wrapping core functions; no modification to original code.
+
+```
+  @log @time @retry(3)                @log @time
+  def collect(date):                  def discover(events):
+      ...                                 ...
+
+  @log @time @retry(3)                @log @time @notify_on_complete
+  def score(events):                  def suggest(patterns):
+      ...                                 ...
+
+  ┌────────────────────────────────────────────────────────────┐
+  │                    Decorator Stack                          │
+  │                                                            │
+  │  call collect(date)                                        │
+  │    └─► @retry: attempt 1                                   │
+  │       └─► @time: start timer                               │
+  │          └─► @log: "collecting..."                         │
+  │             └─► collect()  ─► events                       │
+  │          └─► @log: "done"                                  │
+  │       └─► @time: 2.3s                                      │
+  │                                                            │
+  │  Fan-out: discover(events), score(events), check(events)   │
+  │  Each wrapped in its own decorator stack                   │
+  │                                                            │
+  │  Chain: discover ─► suggest ─► notify                      │
+  │  @notify_on_complete on suggest triggers notification      │
+  └────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 30. DI Container
+
+> Key: A dependency injection container wires all components at startup; components declare dependencies via constructors, and the container resolves the graph.
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    DI CONTAINER (registry)                   │
+  │                                                             │
+  │  register(Collector,      deps=[])                          │
+  │  register(PatternEngine,  deps=[Collector])                 │
+  │  register(Scorer,         deps=[Collector])                 │
+  │  register(ExperimentChk,  deps=[Collector])                 │
+  │  register(SuggestEngine,  deps=[PatternEngine])             │
+  │  register(Notifier,       deps=[PatternEngine, SuggestEng]) │
+  │                                                             │
+  │  resolve(Notifier) ─► builds full dependency tree:          │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │
+                             ▼
+            Collector ◄── PatternEngine ◄── SuggestEngine
+                │                               │
+                ├──── Scorer                     │
+                │                                ▼
+                └──── ExperimentChk         Notifier
+                                          (auto-wired)
+```
+
+---
+
+## Comparison Grid
+
+| # | Pattern | Fan-Out | Chain Reactions | Multiple Schedules | Fault Isolation | Extensibility |
+|---|---------|---------|-----------------|--------------------|-----------------|----|
+| 1 | Event Bus / Pub-Sub | Yes (multi-sub) | Yes (events trigger events) | Yes (any subscriber) | Partial (sub failure) | High (add subscribers) |
+| 2 | Observer (GoF) | Yes (multi-observer) | Yes (observer chains) | No (manual) | Low (shared notify) | Medium (add observers) |
+| 3 | Mediator | Yes (mediator routes) | Yes (mediator chains) | Yes (mediator logic) | Medium (central point) | Medium (modify mediator) |
+| 4 | Actor Model | Yes (multi-send) | Yes (message chains) | Yes (per-actor) | High (actor isolation) | High (add actors) |
+| 5 | Pipeline / DAG | Yes (branch nodes) | Yes (DAG edges) | No (fixed DAG) | Low (stage failure) | Low (modify DAG) |
+| 6 | Reactive Streams | Yes (multi-sub) | Yes (stream composition) | Yes (schedulers) | Medium (backpressure) | High (add operators) |
+| 7 | State Machine | No (single path) | Yes (transitions) | No (one machine) | Medium (state guards) | Low (add states) |
+| 8 | Scheduler + Hooks | Yes (hook lists) | Yes (hooks enqueue) | Yes (native) | Medium (hook isolation) | High (add hooks) |
+| 9 | Blackboard | Yes (multi-KS read) | Yes (KS write triggers) | Yes (controller) | Low (shared state) | High (add KS) |
+| 10 | Command Queue | Yes (cmd enqueues cmds) | Yes (cmd chains) | No (single queue) | Medium (cmd isolation) | Medium (add cmds) |
+| 11 | Tuple Spaces | Yes (multi-reader) | Yes (write triggers read) | Yes (reader scheduling) | Medium (space isolation) | High (add processes) |
+| 12 | CSP / Channels | Yes (fan-out channels) | Yes (channel chains) | Yes (per-process) | High (process isolation) | Medium (add processes) |
+| 13 | Coroutine Pipelines | Yes (multi-consumer) | Yes (generator chains) | Yes (async scheduling) | Low (shared event loop) | Medium (add coroutines) |
+| 14 | Rule Engine | Yes (multi-rule match) | Yes (rule fires insert) | Yes (rule priorities) | Medium (rule isolation) | High (add rules) |
+| 15 | Middleware Chain | No (linear chain) | Yes (next() calls) | No (single chain) | Low (shared context) | High (insert middleware) |
+| 16 | Event Sourcing | Yes (multi-projection) | Yes (events trigger events) | Yes (replay anytime) | High (projection isolation) | High (add projections) |
+| 17 | CQRS | Yes (multi-projection) | Yes (command chains) | Yes (read/write separate) | High (side separation) | High (add handlers) |
+| 18 | Saga | Yes (parallel steps) | Yes (step sequences) | No (saga sequence) | High (compensating txn) | Medium (add steps) |
+| 19 | HTN | Yes (task decomposition) | Yes (subtask trees) | Yes (planner) | Medium (task isolation) | Medium (add tasks) |
+| 20 | Plugin + Hooks | Yes (multi-plugin) | Yes (hook chains) | Yes (plugin schedules) | High (plugin isolation) | Very High (add plugins) |
+| 21 | Flow-Based Prog. | Yes (multi-port) | Yes (packet flow) | Yes (per-process) | High (process isolation) | High (add processes) |
+| 22 | Dataflow / Spreadsheet | Yes (multi-dependent) | Yes (auto-propagation) | No (reactive only) | Low (cascade failure) | Medium (add cells) |
+| 23 | Signal/Slot | Yes (multi-slot) | Yes (signal chains) | Yes (slot scheduling) | Medium (slot isolation) | High (connect slots) |
+| 24 | FRP | Yes (merge/combine) | Yes (stream composition) | Yes (schedulers) | Medium (stream isolation) | High (add streams) |
+| 25 | Pi-Calculus | Yes (multi-channel) | Yes (name passing) | Yes (dynamic topology) | High (process isolation) | Very High (dynamic) |
+| 26 | Petri Nets | Yes (multi-output place) | Yes (token propagation) | Yes (concurrent fire) | Medium (place isolation) | Medium (add places) |
+| 27 | CPS / Callbacks | Yes (parallel callbacks) | Yes (nested callbacks) | No (manual) | Low (callback hell) | Low (deep nesting) |
+| 28 | Promise/Future | Yes (Promise.all) | Yes (.then chains) | Yes (async scheduling) | Medium (catch handlers) | Medium (add .then) |
+| 29 | AOP / Decorators | Yes (multi-decorator) | Yes (decorator stack) | No (decoration-time) | Medium (decorator scope) | High (add decorators) |
+| 30 | DI Container | Yes (multi-dep) | No (wiring only) | No (startup only) | High (component isolation) | Very High (register) |
+
+---
+
+### Legend
+
+| Capability | Meaning |
+|---|---|
+| **Fan-Out** | One event triggers multiple independent handlers simultaneously |
+| **Chain Reactions** | Output of one stage automatically triggers the next stage |
+| **Multiple Schedules** | Different components can run on different timing intervals |
+| **Fault Isolation** | Failure in one component does not crash the entire daemon |
+| **Extensibility** | How easy it is to add a new stage without modifying existing code |
+
+---
+
+### Recommendation for LWM Daemon
+
+For the Life World Model daemon, **Event Bus / Pub-Sub (#1)** or **Plugin + Hooks (#20)** are the strongest fits:
+
+- Both support natural fan-out (data -> patterns + scoring + experiments)
+- Both support chain reactions (patterns -> suggestions -> notifications)
+- Both are highly extensible (add new collectors or analyzers without modifying core)
+- Plugin + Hooks has the edge for fault isolation (each plugin is independent)
+- Event Bus has the edge for decoupling (components don't even know about each other)
+
+The current codebase already uses a scheduler-with-hooks style (pattern #8) in the daemon collector. Evolving toward a plugin-based event bus would preserve that structure while adding the fan-out and extensibility needed for the full pipeline.
