@@ -22,3 +22,17 @@ class SimulationResult:
     simulated_score: float
     score_delta: float
     summary: str
+
+
+@dataclass
+class SimulationNarrative:
+    """Side-by-side narrative output from a simulation run."""
+
+    intervention: str
+    baseline_score: float
+    simulated_score: float
+    score_delta: float
+    baseline_narrative: str  # prose for the real day
+    simulated_narrative: str  # prose for the alternate day
+    voice: str  # which voice was used
+    comparison: str = ""  # optional LLM-generated comparison summary

@@ -33,6 +33,9 @@ gemini = [
 web = [
   "flask>=3.0.0"
 ]
+mcp = [
+  "mcp>=1.0.0"
+]
 
 [project.scripts]
 lwm = "life_world_model.cli:main"

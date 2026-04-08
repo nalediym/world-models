@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "life-world-model": {
+      "command": "uv",
+      "args": ["run", "--project", "/Users/naledi/Projects/world-models", "python", "-m", "life_world_model.mcp_server"]
+    }
+  }
+}

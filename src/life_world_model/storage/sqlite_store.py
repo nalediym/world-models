@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS discovered_patterns (
 )
 """
 
+PARALLEL_LIVES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS parallel_lives (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  intervention TEXT NOT NULL,
+  created_date TEXT NOT NULL,
+  duration_days INTEGER NOT NULL,
+  status TEXT DEFAULT 'active',
+  projections_json TEXT
+)
+"""
+
 MIGRATIONS = [
     "ALTER TABLE raw_events ADD COLUMN duration_seconds REAL",
     "ALTER TABLE raw_events ADD COLUMN metadata TEXT",
@@ -81,6 +93,7 @@ class SQLiteStore:
             connection.execute(SUGGESTION_FEEDBACK_SCHEMA)
             connection.execute(EXPERIMENTS_SCHEMA)
             connection.execute(PATTERNS_SCHEMA)
+            connection.execute(PARALLEL_LIVES_SCHEMA)
             self._run_migrations(connection)
             connection.commit()
 

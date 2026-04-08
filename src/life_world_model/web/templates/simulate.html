@@ -16,6 +16,9 @@
     <input type="text" id="scenario-input" class="text-input"
            placeholder="e.g. code from 8-10am before email"
            autocomplete="off" required>
+    <label style="display:inline-flex;align-items:center;gap:0.5em;margin:0.5em 0;">
+      <input type="checkbox" id="narrate-check"> Generate narratives
+    </label>
     <button type="submit" class="btn btn-primary" id="sim-btn">Simulate</button>
   </form>
 </section>
@@ -40,6 +43,23 @@
     <div class="sim-summary" id="sim-summary"></div>
   </section>
 
+  <div id="sim-narratives" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1em;">
+      <section class="card">
+        <h2>The Day That Was</h2>
+        <div id="sim-baseline-narrative" class="narrative-prose"></div>
+      </section>
+      <section class="card">
+        <h2>The Day That Could Have Been</h2>
+        <div id="sim-simulated-narrative" class="narrative-prose"></div>
+      </section>
+    </div>
+    <section class="card">
+      <h2>Comparison</h2>
+      <div id="sim-comparison" class="narrative-prose"></div>
+    </section>
+  </div>
+
   <section class="card">
     <h2>Intervention Parsed</h2>
     <div id="sim-intervention" class="intervention-detail"></div>
@@ -54,9 +74,10 @@ document.getElementById('simulate-form').addEventListener('submit', function(e) 
   var scenario = document.getElementById('scenario-input').value.trim();
   if (!scenario) return;
 
+  var narrate = document.getElementById('narrate-check').checked;
   var btn = document.getElementById('sim-btn');
   btn.disabled = true;
-  btn.textContent = 'Running...';
+  btn.textContent = narrate ? 'Generating narratives...' : 'Running...';
 
   var xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/simulate');
@@ -78,7 +99,7 @@ document.getElementById('simulate-form').addEventListener('submit', function(e) 
     btn.textContent = 'Simulate';
     alert('Network error');
   };
-  xhr.send(JSON.stringify({ scenario: scenario }));
+  xhr.send(JSON.stringify({ scenario: scenario, narrate: narrate }));
 });
 
 function showResult(data) {
@@ -101,6 +122,17 @@ function showResult(data) {
     html += '<div><strong>Parameters:</strong> ' + escapeHtml(JSON.stringify(iv.params)) + '</div>';
   }
   document.getElementById('sim-intervention').innerHTML = html;
+
+  /* Show narratives if present */
+  var narrativesEl = document.getElementById('sim-narratives');
+  if (data.baseline_narrative && data.simulated_narrative) {
+    document.getElementById('sim-baseline-narrative').textContent = data.baseline_narrative;
+    document.getElementById('sim-simulated-narrative').textContent = data.simulated_narrative;
+    document.getElementById('sim-comparison').textContent = data.comparison || '';
+    narrativesEl.style.display = 'block';
+  } else {
+    narrativesEl.style.display = 'none';
+  }
 }
 </script>
 {% endblock %}

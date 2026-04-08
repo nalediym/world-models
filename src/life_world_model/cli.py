@@ -446,14 +446,44 @@ def run_goals(subcmd: str = "list") -> int:
     return 2
 
 
-def run_simulate(text: str, baseline_date: str | None = None) -> int:
+def run_simulate(
+    text: str,
+    baseline_date: str | None = None,
+    narrate: bool = False,
+    voice_name: str | None = None,
+) -> int:
     """Run a what-if simulation against baseline data."""
     settings = load_settings()
     store = SQLiteStore(settings.database_path)
 
     bl_date = parse_date(baseline_date) if baseline_date else None
     result = simulate(store, settings, text, baseline_date=bl_date)
-    print(result.summary)
+
+    if not narrate:
+        print(result.summary)
+        return 0
+
+    from life_world_model.simulation.narrator import (
+        narrate_simulation,
+        render_side_by_side,
+    )
+
+    target_date = bl_date or date.today()
+    if result.baseline_states:
+        target_date = result.baseline_states[0].timestamp.date()
+
+    print("Generating side-by-side narratives...")
+    narrative = narrate_simulation(
+        baseline_states=result.baseline_states,
+        simulated_states=result.simulated_states,
+        intervention_text=text,
+        target_date=target_date,
+        settings=settings,
+        baseline_score=result.baseline_score,
+        simulated_score=result.simulated_score,
+        voice_name=voice_name,
+    )
+    print(render_side_by_side(narrative))
     return 0
 
 
@@ -637,6 +667,14 @@ def run_briefing() -> int:
     return 0
 
 
+def run_mcp() -> int:
+    """Start the MCP server for AI assistant integration."""
+    from life_world_model.mcp_server.server import run_server
+
+    run_server()
+    return 0
+
+
 def run_voices() -> int:
     """List all available narrative voices."""
     print("Available voices:\n")
@@ -727,6 +765,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="baseline_date",
         help="Baseline date in YYYY-MM-DD format (default: best of last 7 days)",
     )
+    simulate_parser.add_argument(
+        "--narrate",
+        action="store_true",
+        help="Generate side-by-side prose narratives for the real and alternate day",
+    )
+    simulate_parser.add_argument(
+        "--voice",
+        default=None,
+        dest="voice",
+        help="Narrative voice for simulation (default: tolkien). See 'lwm voices'",
+    )
 
     suggest_parser = subparsers.add_parser(
         "suggest", help="Generate actionable suggestions from patterns"
@@ -794,6 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("briefing", help="Send the morning briefing notification")
 
     subparsers.add_parser("voices", help="List available narrative voices")
+    subparsers.add_parser("mcp", help="Start the MCP server for AI assistant integration")
 
     dashboard_parser = subparsers.add_parser(
         "dashboard", help="Start the web dashboard"
@@ -840,6 +890,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_simulate(
             args.scenario,
             baseline_date=getattr(args, "baseline_date", None),
+            narrate=getattr(args, "narrate", False),
+            voice_name=getattr(args, "voice", None),
         )
     if args.command == "suggest":
         return run_suggest(
@@ -863,6 +915,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_voices()
     if args.command == "dashboard":
         return run_dashboard(port=getattr(args, "port", 8765))
+    if args.command == "mcp":
+        return run_mcp()
 
     parser.error(f"Unknown command: {args.command}")
     return 2

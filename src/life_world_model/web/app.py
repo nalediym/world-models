@@ -275,6 +275,8 @@ def create_app(settings: Settings | None = None) -> Flask:
         data = request.get_json(silent=True) or {}
         scenario = data.get("scenario", "")
         baseline_date_str = data.get("baseline_date")
+        narrate = data.get("narrate", False)
+        voice_name = data.get("voice")
 
         if not scenario:
             return jsonify({"error": "scenario is required"}), 400
@@ -289,7 +291,7 @@ def create_app(settings: Settings | None = None) -> Flask:
 
         result = simulate(store, settings, scenario, baseline_date=bl_date)
 
-        return jsonify({
+        response_data = {
             "intervention": {
                 "type": result.intervention.type,
                 "activity": result.intervention.activity,
@@ -300,7 +302,37 @@ def create_app(settings: Settings | None = None) -> Flask:
             "simulated_score": round(result.simulated_score, 4),
             "score_delta": round(result.score_delta, 4),
             "summary": result.summary,
-        })
+        }
+
+        if narrate:
+            from life_world_model.simulation.narrator import narrate_simulation
+
+            target_date = bl_date or date.today()
+            if result.baseline_states:
+                target_date = result.baseline_states[0].timestamp.date()
+
+            try:
+                narrative = narrate_simulation(
+                    baseline_states=result.baseline_states,
+                    simulated_states=result.simulated_states,
+                    intervention_text=scenario,
+                    target_date=target_date,
+                    settings=settings,
+                    baseline_score=result.baseline_score,
+                    simulated_score=result.simulated_score,
+                    voice_name=voice_name,
+                )
+                response_data["baseline_narrative"] = narrative.baseline_narrative
+                response_data["simulated_narrative"] = narrative.simulated_narrative
+                response_data["comparison"] = narrative.comparison
+                response_data["voice"] = narrative.voice
+            except Exception:
+                response_data["baseline_narrative"] = None
+                response_data["simulated_narrative"] = None
+                response_data["comparison"] = None
+                response_data["voice"] = None
+
+        return jsonify(response_data)
 
     return app
 

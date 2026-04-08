@@ -22,6 +22,7 @@ class Settings:
     default_style: str = "plain"
     # Narrative voice/persona. Valid: tolkien, clinical, casual, poetic, coach, data
     voice: str = "tolkien"
+    privacy_mode: str = "standard"  # "standard", "enhanced", "paranoid"
 
 
 def _load_dotenv() -> None:
@@ -73,6 +74,7 @@ def load_settings() -> Settings:
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     default_style = os.getenv("LWM_DEFAULT_STYLE", "plain")
     voice = os.getenv("LWM_VOICE", "tolkien")
+    privacy_mode = os.getenv("LWM_PRIVACY_MODE", "standard")
 
     return Settings(
         database_path=database_path,
@@ -89,4 +91,5 @@ def load_settings() -> Settings:
         default_style=default_style,
         voice=voice,
         safari_history_path=safari_history_path,
+        privacy_mode=privacy_mode,
     )
