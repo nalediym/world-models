@@ -1,23 +1,20 @@
-"""Daemon: event-driven continuous learning loop.
-
-Replaces the flat while-True loop with:
-- EventBus (Elixir PubSub) for fan-out event routing
-- sched.scheduler (Go-style multi-rate timers) for scheduling
-- Per-handler fault isolation (Elixir Supervisor)
-- Cooperative shutdown (Go context / Rust CancellationToken)
-"""
-
 from __future__ import annotations
 
-import sched
 import time
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 
+from life_world_model.analysis.pattern_discovery import (
+    decay_pattern_confidence,
+    discover_patterns,
+)
 from life_world_model.config import Settings, load_settings
-from life_world_model.daemon.bus import EventBus, ShutdownSignal
-from life_world_model.daemon.events import DataCollected
-from life_world_model.daemon.handlers import decay_patterns, register_all_handlers
+from life_world_model.goals.engine import load_goals
+from life_world_model.notifications.macos import send_notification
+from life_world_model.pipeline.bucketizer import build_life_states
+from life_world_model.scoring.formula import score_day
 from life_world_model.storage.sqlite_store import SQLiteStore
+from life_world_model.types import Pattern
 
 
 def _collect_cycle(settings: Settings, store: SQLiteStore) -> int:
@@ -36,18 +33,14 @@ def _collect_cycle(settings: Settings, store: SQLiteStore) -> int:
             events = collector.collect_for_date(today)
             store.save_raw_events(events)
             total += len(events)
-        except Exception as e:
-            print(f"[collector] {collector.source_name} error: {e}")
+        except Exception:
+            pass  # daemon is silent — errors are swallowed
 
     return total
 
 
 def _score_today(settings: Settings, store: SQLiteStore) -> float:
     """Bucket and score today's data. Returns total score (0.0-1.0)."""
-    from life_world_model.goals.engine import load_goals
-    from life_world_model.pipeline.bucketizer import build_life_states
-    from life_world_model.scoring.formula import score_day
-
     today = date.today()
     events = store.load_raw_events_for_date(today)
     states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
@@ -56,68 +49,71 @@ def _score_today(settings: Settings, store: SQLiteStore) -> float:
     return result["total"]
 
 
-def run_daemon(interval_minutes: int = 60) -> None:
-    """Event-driven daemon loop with multi-rate scheduling.
+def _refresh_patterns(settings: Settings, store: SQLiteStore) -> list[Pattern]:
+    """Discover patterns from the last 30 days and apply confidence decay.
 
-    Hourly: collect events → emit DataCollected → handlers fan out
-    Daily @ midnight: pattern confidence decay
-    Ctrl+C or SIGTERM to stop.
+    Returns patterns with decayed confidence; stale patterns (< 0.1) are
+    marked with category='stale'.
+    """
+    today = date.today()
+    start = today - timedelta(days=30)
+
+    multi_day_states: dict[date, list] = defaultdict(list)
+    current = start
+    while current <= today:
+        events = store.load_raw_events_for_date(current)
+        if events:
+            states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
+            if states:
+                multi_day_states[current] = states
+        current += timedelta(days=1)
+
+    if not multi_day_states:
+        return []
+
+    # discover_patterns with reference_date applies decay automatically
+    patterns = discover_patterns(dict(multi_day_states), reference_date=today)
+    return patterns
+
+
+def run_daemon(interval_minutes: int = 60) -> None:
+    """Foreground daemon loop. Collects from all sources each cycle,
+    scores today, sends macOS notification if score changes >5%.
+    Ctrl+C to stop.
     """
     settings = load_settings()
     store = SQLiteStore(settings.database_path)
-    bus = EventBus()
-    shutdown = ShutdownSignal()
-    shutdown.install_signal_handlers()
 
-    # Wire all handlers to the bus
-    register_all_handlers(bus, settings, store)
-
-    scheduler = sched.scheduler(time.time, time.sleep)
-
-    def collection_tick() -> None:
-        if shutdown.is_set:
-            return
-        today = date.today()
-        collected = _collect_cycle(settings, store)
-        print(f"[daemon] {today} — collected {collected} events")
-
-        bus.emit(DataCollected(collected_date=today, event_count=collected))
-
-        # Re-schedule (Elixir Process.send_after pattern)
-        if not shutdown.is_set:
-            scheduler.enter(interval_minutes * 60, 1, collection_tick)
-
-    def decay_tick() -> None:
-        if shutdown.is_set:
-            return
-        print("[daemon] Running pattern confidence decay...")
-        decay_patterns(store, bus)
-        # Re-schedule daily
-        if not shutdown.is_set:
-            scheduler.enter(86400, 2, decay_tick)
-
-    # Schedule initial ticks
-    scheduler.enter(0, 1, collection_tick)     # collect immediately
-    scheduler.enter(86400, 2, decay_tick)      # decay daily
+    last_score: float | None = None
 
     print(f"LWM daemon started (interval: {interval_minutes}min). Ctrl+C to stop.")
-    print(f"  Handlers: {len(bus._handlers)} event types registered")
 
     try:
-        while not shutdown.is_set:
-            # Run pending scheduled events with a short timeout
-            # so we can check the shutdown signal
-            if scheduler.queue:
-                scheduler.run(blocking=False)
-            shutdown.wait(timeout=1.0)
+        while True:
+            collected = _collect_cycle(settings, store)
+            current_score = _score_today(settings, store)
+
+            # Refresh patterns with confidence decay
+            patterns = _refresh_patterns(settings, store)
+            active_count = sum(1 for p in patterns if p.category != "stale")
+            stale_count = sum(1 for p in patterns if p.category == "stale")
+
+            print(
+                f"[{date.today()}] collected {collected} events, "
+                f"score: {current_score:.1%}, "
+                f"patterns: {active_count} active / {stale_count} stale"
+            )
+
+            if last_score is not None:
+                delta = abs(current_score - last_score)
+                if delta > 0.05:
+                    direction = "up" if current_score > last_score else "down"
+                    send_notification(
+                        "LWM Score Change",
+                        f"Score {direction}: {last_score:.0%} -> {current_score:.0%}",
+                    )
+
+            last_score = current_score
+            time.sleep(interval_minutes * 60)
     except KeyboardInterrupt:
-        pass
-
-    # Report handler health on exit
-    errors = bus.handler_errors
-    if errors:
-        print("\n[daemon] Handler error summary:")
-        for name, count in errors.items():
-            print(f"  {name}: {count} errors")
-
-    print("\nDaemon stopped.")
+        print("\nDaemon stopped.")

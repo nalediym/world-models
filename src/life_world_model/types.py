@@ -99,3 +99,12 @@ class Experiment:
     baseline_score: float | None = None
     result_score: float | None = None
     result_summary: str | None = None
+
+
+@dataclass
+class ProposedExperiment:
+    description: str
+    duration_days: int = 3
+    expected_impact: str = "medium"
+    source_suggestion_id: str = ""
+    predicted_score_delta: float = 0.0

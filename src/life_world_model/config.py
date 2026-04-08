@@ -14,11 +14,14 @@ class Settings:
     zsh_history_path: Path = Path.home() / ".zsh_history"
     git_scan_paths: list[Path] | None = None
     calendar_path: Path = Path.home() / "Library/Calendars"
+    safari_history_path: Path = Path.home() / "Library/Safari/History.db"
     bucket_minutes: int = 15
     llm_provider: str = "gemini"
     llm_model: str = "gemini-2.5-flash"
     gemini_api_key: str | None = None
     default_style: str = "plain"
+    # Narrative voice/persona. Valid: tolkien, clinical, casual, poetic, coach, data
+    voice: str = "tolkien"
 
 
 def _load_dotenv() -> None:
@@ -60,12 +63,16 @@ def load_settings() -> Settings:
     calendar_path = Path(
         os.getenv("LWM_CALENDAR_PATH", str(Path.home() / "Library/Calendars"))
     )
+    safari_history_path = Path(
+        os.getenv("LWM_SAFARI_HISTORY_PATH", str(Path.home() / "Library/Safari/History.db"))
+    )
 
     bucket_minutes = int(os.getenv("LWM_BUCKET_MINUTES", "15"))
     llm_provider = os.getenv("LWM_LLM_PROVIDER", "gemini")
     llm_model = os.getenv("LWM_LLM_MODEL", "gemini-2.5-flash")
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     default_style = os.getenv("LWM_DEFAULT_STYLE", "plain")
+    voice = os.getenv("LWM_VOICE", "tolkien")
 
     return Settings(
         database_path=database_path,
@@ -80,4 +87,6 @@ def load_settings() -> Settings:
         llm_model=llm_model,
         gemini_api_key=gemini_api_key,
         default_style=default_style,
+        voice=voice,
+        safari_history_path=safari_history_path,
     )

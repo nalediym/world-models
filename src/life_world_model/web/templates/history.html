@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block heading %}History{% endblock %}
+
+{% block body %}
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Days Tracked</div>
+    <div class="stat-value" id="days-tracked">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Average Score</div>
+    <div class="stat-value" id="avg-score">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Best Day</div>
+    <div class="stat-value" id="best-day">--</div>
+  </div>
+</div>
+
+<section class="card">
+  <h2>Daily Scores (Last 30 Days)</h2>
+  <div class="history-chart" id="history-chart">
+    <div class="empty-state">Loading history...</div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Day Details</h2>
+  <div class="history-table-wrap">
+    <table class="history-table" id="history-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Score</th>
+          <th>Grade</th>
+          <th>Events</th>
+          <th>Buckets</th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  fetchJSON('/api/history?days=30', function(data) {
+    renderHistoryChart(data.history);
+    renderHistoryTable(data.history);
+    computeStats(data.history);
+  });
+});
+
+function computeStats(history) {
+  var activeDays = history.filter(function(d) { return d.event_count > 0; });
+  document.getElementById('days-tracked').textContent = activeDays.length;
+
+  if (activeDays.length > 0) {
+    var sum = 0;
+    var best = activeDays[0];
+    for (var i = 0; i < activeDays.length; i++) {
+      sum += activeDays[i].score;
+      if (activeDays[i].score > best.score) best = activeDays[i];
+    }
+    document.getElementById('avg-score').textContent = formatPercent(sum / activeDays.length);
+    document.getElementById('best-day').textContent = best.date + ' (' + best.grade + ')';
+  } else {
+    document.getElementById('avg-score').textContent = '--';
+    document.getElementById('best-day').textContent = '--';
+  }
+}
+
+function renderHistoryChart(history) {
+  var container = document.getElementById('history-chart');
+  if (!history.length) {
+    container.innerHTML = '<div class="empty-state">No history data.</div>';
+    return;
+  }
+
+  var maxScore = 0;
+  for (var i = 0; i < history.length; i++) {
+    if (history[i].score > maxScore) maxScore = history[i].score;
+  }
+  if (maxScore === 0) maxScore = 1;
+
+  var html = '<div class="chart-bars">';
+  for (var j = 0; j < history.length; j++) {
+    var d = history[j];
+    var heightPct = (d.score / maxScore) * 100;
+    var barColor = d.event_count > 0 ? gradeColor(d.grade) : '#1a1a1a';
+    var label = d.date.slice(5); // MM-DD
+    html += '<div class="chart-bar-col" title="' + d.date + ': ' + formatPercent(d.score) + ' (' + d.grade + ')">' +
+      '<div class="chart-bar" style="height:' + heightPct + '%;background:' + barColor + '"></div>' +
+      '<span class="chart-label">' + label + '</span>' +
+      '</div>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function renderHistoryTable(history) {
+  var tbody = document.getElementById('history-tbody');
+  // Show most recent first
+  var sorted = history.slice().reverse();
+  var html = '';
+  for (var i = 0; i < sorted.length; i++) {
+    var d = sorted[i];
+    if (d.event_count === 0) continue;
+    html += '<tr>' +
+      '<td>' + d.date + '</td>' +
+      '<td>' + formatPercent(d.score) + '</td>' +
+      '<td><span class="grade-badge grade-' + d.grade + '">' + d.grade + '</span></td>' +
+      '<td>' + d.event_count + '</td>' +
+      '<td>' + d.bucket_count + '</td>' +
+      '</tr>';
+  }
+  if (!html) {
+    html = '<tr><td colspan="5" class="empty-state">No days with data found.</td></tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+function gradeColor(grade) {
+  var colors = { A: '#22c55e', B: '#3b82f6', C: '#eab308', D: '#f97316', F: '#ef4444' };
+  return colors[grade] || '#666';
+}
+</script>
+{% endblock %}

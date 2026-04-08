@@ -1,21 +1,11 @@
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from datetime import date
 from statistics import mean
 
 from life_world_model.types import LifeState, Pattern
-
-
-def discover_patterns(multi_day_states: dict[date, list[LifeState]]) -> list[Pattern]:
-    """Run all detectors and return discovered patterns."""
-    patterns: list[Pattern] = []
-    patterns.extend(detect_routines(multi_day_states))
-    patterns.extend(detect_productivity_correlations(multi_day_states))
-    patterns.extend(detect_circadian_rhythm(multi_day_states))
-    patterns.extend(detect_context_switching_cost(multi_day_states))
-    patterns.extend(detect_time_sinks(multi_day_states))
-    return patterns
 
 
 def compare_patterns(
@@ -24,6 +14,84 @@ def compare_patterns(
     """Return patterns in new_patterns that are not in old_patterns (by name)."""
     old_names = {p.name for p in old_patterns}
     return [p for p in new_patterns if p.name not in old_names]
+
+
+def decay_pattern_confidence(
+    patterns: list[Pattern],
+    reference_date: date,
+    half_life: float = 14.0,
+) -> list[Pattern]:
+    """Apply temporal decay to pattern confidence based on last_seen date.
+
+    Formula: decayed_confidence = confidence * e^(-0.693 * days_since / half_life)
+    Patterns below 0.1 confidence after decay are marked stale (category -> "stale").
+    """
+    result: list[Pattern] = []
+    for p in patterns:
+        if p.last_seen is None:
+            result.append(p)
+            continue
+
+        days_since = (reference_date - p.last_seen).days
+        if days_since < 0:
+            # Pattern last seen in the future relative to reference — no decay
+            result.append(p)
+            continue
+
+        decay_factor = math.exp(-0.693 * days_since / half_life)
+        decayed = p.confidence * decay_factor
+
+        if decayed < 0.1:
+            # Mark as stale
+            result.append(
+                Pattern(
+                    name=p.name,
+                    category="stale",
+                    description=p.description,
+                    evidence=p.evidence,
+                    confidence=round(decayed, 4),
+                    days_observed=p.days_observed,
+                    first_seen=p.first_seen,
+                    last_seen=p.last_seen,
+                )
+            )
+        else:
+            result.append(
+                Pattern(
+                    name=p.name,
+                    category=p.category,
+                    description=p.description,
+                    evidence=p.evidence,
+                    confidence=round(decayed, 4),
+                    days_observed=p.days_observed,
+                    first_seen=p.first_seen,
+                    last_seen=p.last_seen,
+                )
+            )
+
+    return result
+
+
+def discover_patterns(
+    multi_day_states: dict[date, list[LifeState]],
+    reference_date: date | None = None,
+) -> list[Pattern]:
+    """Run all detectors and return discovered patterns.
+
+    If reference_date is provided, applies confidence decay based on how recently
+    each pattern was last observed.
+    """
+    patterns: list[Pattern] = []
+    patterns.extend(detect_routines(multi_day_states))
+    patterns.extend(detect_productivity_correlations(multi_day_states))
+    patterns.extend(detect_circadian_rhythm(multi_day_states))
+    patterns.extend(detect_context_switching_cost(multi_day_states))
+    patterns.extend(detect_time_sinks(multi_day_states))
+
+    if reference_date is not None:
+        patterns = decay_pattern_confidence(patterns, reference_date)
+
+    return patterns
 
 
 def detect_routines(multi_day_states: dict[date, list[LifeState]]) -> list[Pattern]:

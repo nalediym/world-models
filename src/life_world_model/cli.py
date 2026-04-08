@@ -17,13 +17,20 @@ from life_world_model.pipeline.generator import (
 )
 from life_world_model.storage.sqlite_store import SQLiteStore
 from life_world_model.analysis.pattern_discovery import discover_patterns
+from life_world_model.analysis.proactive import suggest_experiments
 from life_world_model.analysis.suggestions import generate_suggestions
 from life_world_model.types import FeedbackAction, SuggestionFeedback
 from life_world_model.analysis.narrator import narrate_patterns
 from life_world_model.daemon.collector import run_daemon
 from life_world_model.goals.engine import load_goals
 from life_world_model.notifications.briefing import morning_briefing
-from life_world_model.scoring.formula import format_score_report, score_day
+from life_world_model.pipeline.voices import VOICES, Voice, get_voice
+from life_world_model.scoring.formula import (
+    format_detailed_report,
+    format_score_report,
+    score_day,
+    score_day_detailed,
+)
 from life_world_model.experiments.engine import (
     cancel_experiment,
     check_experiment_status,
@@ -48,6 +55,9 @@ def _import_collectors() -> None:
         "shell_history",
         "git_activity",
         "calendar",
+        "screen_time",
+        "recent_files",
+        "safari_history",
     ):
         try:
             importlib.import_module(f"life_world_model.collectors.{mod_name}")
@@ -87,6 +97,24 @@ def _build_collectors(settings: Settings, source_filter: str | None = None) -> l
         from life_world_model.collectors.calendar import CalendarCollector
 
         factory["calendar"] = lambda: CalendarCollector(settings.calendar_path)
+    except ImportError:
+        pass
+    try:
+        from life_world_model.collectors.screen_time import ScreenTimeCollector
+
+        factory["screentime"] = lambda: ScreenTimeCollector(settings.knowledgec_path)
+    except ImportError:
+        pass
+    try:
+        from life_world_model.collectors.recent_files import RecentFilesCollector
+
+        factory["files"] = lambda: RecentFilesCollector()
+    except ImportError:
+        pass
+    try:
+        from life_world_model.collectors.safari_history import SafariHistoryCollector
+
+        factory["safari"] = lambda: SafariHistoryCollector(settings.safari_history_path)
     except ImportError:
         pass
 
@@ -229,6 +257,30 @@ def run_sources() -> int:
     except ImportError:
         source_info.append(("calendar", False, str(settings.calendar_path) + " (module not installed)"))
 
+    try:
+        from life_world_model.collectors.screen_time import ScreenTimeCollector
+
+        c = ScreenTimeCollector(settings.knowledgec_path)
+        source_info.append(("screentime", c.is_available(), str(settings.knowledgec_path) + " (/app/usage)"))
+    except ImportError:
+        source_info.append(("screentime", False, str(settings.knowledgec_path) + " (module not installed)"))
+
+    try:
+        from life_world_model.collectors.recent_files import RecentFilesCollector
+
+        c = RecentFilesCollector()
+        source_info.append(("files", c.is_available(), "mdfind (Spotlight)"))
+    except ImportError:
+        source_info.append(("files", False, "mdfind (module not installed)"))
+
+    try:
+        from life_world_model.collectors.safari_history import SafariHistoryCollector
+
+        c = SafariHistoryCollector(settings.safari_history_path)
+        source_info.append(("safari", c.is_available(), str(settings.safari_history_path)))
+    except ImportError:
+        source_info.append(("safari", False, str(settings.safari_history_path) + " (module not installed)"))
+
     # Find the longest source name for alignment
     max_name = max(len(name) for name, _, _ in source_info) if source_info else 0
 
@@ -242,16 +294,18 @@ def run_sources() -> int:
     return 0
 
 
-def _generate_content(settings, states, target_date):
+def _generate_content(settings, states, target_date, voice: Voice | None = None):
     """Try the configured LLM provider, fall back to timeline markdown."""
+    if voice is None:
+        voice = get_voice(settings.voice)
     if settings.llm_provider == "gemini":
         if not settings.gemini_api_key:
             print("GEMINI_API_KEY not set — falling back to timeline output.")
             return render_fallback_markdown(target_date, states)
         try:
-            print(f"Generating narrative with {settings.llm_model} ...")
+            print(f"Generating narrative with {settings.llm_model} (voice: {voice.name}) ...")
             prose = generate_with_gemini(
-                states, target_date, settings.llm_model, settings.gemini_api_key
+                states, target_date, settings.llm_model, settings.gemini_api_key, voice=voice
             )
             return render_narrative_markdown(target_date, states, prose)
         except ImportError:
@@ -261,8 +315,8 @@ def _generate_content(settings, states, target_date):
 
     if settings.llm_provider == "mlx":
         try:
-            print(f"Generating narrative with {settings.llm_model} ...")
-            prose = generate_with_mlx(states, target_date, settings.llm_model)
+            print(f"Generating narrative with {settings.llm_model} (voice: {voice.name}) ...")
+            prose = generate_with_mlx(states, target_date, settings.llm_model, voice=voice)
             return render_narrative_markdown(target_date, states, prose)
         except ImportError:
             print("mlx-lm not installed — falling back to timeline output.")
@@ -272,8 +326,8 @@ def _generate_content(settings, states, target_date):
     if settings.llm_provider in ("gemini-cli", "claude-cli"):
         cli_cmd = settings.llm_provider.replace("-cli", "")
         try:
-            print(f"Generating narrative with {cli_cmd} CLI ...")
-            prose = generate_with_cli(states, target_date, cli_cmd)
+            print(f"Generating narrative with {cli_cmd} CLI (voice: {voice.name}) ...")
+            prose = generate_with_cli(states, target_date, cli_cmd, voice=voice)
             return render_narrative_markdown(target_date, states, prose)
         except FileNotFoundError:
             print(f"{cli_cmd} CLI not found in PATH — falling back to timeline output.")
@@ -285,7 +339,7 @@ def _generate_content(settings, states, target_date):
     return render_fallback_markdown(target_date, states)
 
 
-def run_generate(date_value: str) -> int:
+def run_generate(date_value: str, voice_name: str | None = None) -> int:
     settings = load_settings()
     target_date = parse_date(date_value)
     store = SQLiteStore(settings.database_path)
@@ -293,7 +347,8 @@ def run_generate(date_value: str) -> int:
     events = store.load_raw_events_for_date(target_date)
     states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
 
-    content = _generate_content(settings, states, target_date)
+    voice = get_voice(voice_name) if voice_name else None
+    content = _generate_content(settings, states, target_date, voice=voice)
 
 
     output_path = write_rollout(settings.output_dir, target_date, content)
@@ -383,8 +438,8 @@ def run_goals(subcmd: str = "list") -> int:
         events = store.load_raw_events_for_date(today)
         states = build_life_states(events, bucket_minutes=settings.bucket_minutes)
         goals = load_goals()
-        result = score_day(states, goals)
-        print(format_score_report(result, today))
+        breakdown = score_day_detailed(states, goals)
+        print(format_detailed_report(breakdown, today))
         return 0
 
     print(f"Unknown goals subcommand: {subcmd}. Use 'list' or 'progress'.")
@@ -487,6 +542,15 @@ def run_suggest(
             print(f"   Based on: {', '.join(s.source_patterns)}")
         print()
 
+    # Propose experiments from high-impact suggestions
+    proposed = suggest_experiments(suggestions)
+    if proposed:
+        print("--- Proposed Experiments ---")
+        for exp in proposed:
+            print(f"  {exp.description}")
+            print(f"  Duration: {exp.duration_days} days | Expected: {exp.expected_impact}")
+            print()
+
     return 0
 
 
@@ -573,6 +637,31 @@ def run_briefing() -> int:
     return 0
 
 
+def run_voices() -> int:
+    """List all available narrative voices."""
+    print("Available voices:\n")
+    for name, v in VOICES.items():
+        lo, hi = v.word_range
+        print(f"  {name:10s}  {lo}-{hi} words")
+        desc = v.system_prompt.split(". ")[0] + "."
+        print(f"             {desc}")
+        print()
+    print(f"Set voice with --voice <name>, LWM_VOICE env var, or in .env")
+    return 0
+
+
+def run_dashboard(port: int = 8765) -> int:
+    """Start the web dashboard."""
+    try:
+        from life_world_model.web.app import run_dashboard as _run
+    except ImportError:
+        print("Flask is not installed. Install the web extra:")
+        print("  uv pip install 'life-world-model[web]'")
+        return 1
+    _run(port=port, debug=True)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Personal life world model MVP CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -589,11 +678,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate one day narrative")
     generate_parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
+    generate_parser.add_argument("--voice", default=None, help="Narrative voice (e.g. tolkien, clinical, casual, poetic, coach, data)")
 
     run_parser = subparsers.add_parser("run", help="Collect then generate")
     run_parser.add_argument("--date", default=date.today().isoformat(), dest="date_value", help="Date in YYYY-MM-DD format (default: today)")
     run_parser.add_argument("--demo", action="store_true", help="Use bundled demo data instead of real sources")
     run_parser.add_argument("--source", default=None, help="Collect from a single source (e.g. chrome, shell, git)")
+    run_parser.add_argument("--voice", default=None, help="Narrative voice (e.g. tolkien, clinical, casual, poetic, coach, data)")
 
     subparsers.add_parser("sources", help="List all collectors, their availability, and data paths")
 
@@ -702,6 +793,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("briefing", help="Send the morning briefing notification")
 
+    subparsers.add_parser("voices", help="List available narrative voices")
+
+    dashboard_parser = subparsers.add_parser(
+        "dashboard", help="Start the web dashboard"
+    )
+    dashboard_parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port to run the dashboard on (default: 8765)",
+    )
+
     return parser
 
 
@@ -714,12 +817,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_backfill(source=getattr(args, "source", None))
         return run_collect(args.date_value, use_demo=args.demo, source=args.source)
     if args.command == "generate":
-        return run_generate(args.date_value)
+        return run_generate(args.date_value, voice_name=getattr(args, "voice", None))
     if args.command == "run":
         status = run_collect(args.date_value, use_demo=args.demo, source=getattr(args, "source", None))
         if status != 0:
             return status
-        return run_generate(args.date_value)
+        return run_generate(args.date_value, voice_name=getattr(args, "voice", None))
     if args.command == "sources":
         return run_sources()
     if args.command == "patterns":
@@ -756,6 +859,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "briefing":
         return run_briefing()
+    if args.command == "voices":
+        return run_voices()
+    if args.command == "dashboard":
+        return run_dashboard(port=getattr(args, "port", 8765))
 
     parser.error(f"Unknown command: {args.command}")
     return 2

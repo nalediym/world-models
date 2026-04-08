@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Suggestions{% endblock %}
+{% block heading %}Suggestions{% endblock %}
+
+{% block body %}
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Suggestions</div>
+    <div class="stat-value" id="suggestion-count">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Source Patterns</div>
+    <div class="stat-value" id="pattern-count">--</div>
+  </div>
+</div>
+
+<div id="suggestions-list">
+  <div class="empty-state">Loading suggestions...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  loadSuggestions();
+});
+
+function loadSuggestions() {
+  fetchJSON('/api/suggestions', function(data) {
+    document.getElementById('suggestion-count').textContent = data.suggestions.length;
+    document.getElementById('pattern-count').textContent = data.pattern_count;
+    renderSuggestions(data.suggestions);
+  });
+}
+
+function renderSuggestions(suggestions) {
+  var container = document.getElementById('suggestions-list');
+  if (!suggestions.length) {
+    container.innerHTML = '<div class="card"><div class="empty-state">No suggestions yet. Collect more data and patterns will emerge.</div></div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < suggestions.length; i++) {
+    var s = suggestions[i];
+    var impactClass = 'impact-' + s.predicted_impact;
+    var deltaStr = s.score_delta >= 0 ? '+' + formatPercent(s.score_delta) : formatPercent(s.score_delta);
+    var statusClass = s.status !== 'pending' ? ' suggestion-' + s.status : '';
+
+    html += '<div class="card suggestion-card' + statusClass + '" data-id="' + s.id + '">' +
+      '<div class="suggestion-header">' +
+      '<span class="impact-badge ' + impactClass + '">' + s.predicted_impact.toUpperCase() + '</span>' +
+      '<span class="suggestion-type">' + s.intervention_type + '</span>' +
+      '<span class="suggestion-delta ' + (s.score_delta >= 0 ? 'delta-positive' : 'delta-negative') + '">' + deltaStr + '</span>' +
+      '</div>' +
+      '<h3 class="suggestion-title">' + escapeHtml(s.title) + '</h3>' +
+      '<p class="suggestion-rationale">' + escapeHtml(s.rationale) + '</p>' +
+      '<div class="suggestion-sources">Based on: ' + s.source_patterns.join(', ') + '</div>' +
+      '<div class="suggestion-actions">' +
+      '<button class="btn btn-accept" onclick="respondSuggestion(\'' + s.id + '\', \'accept\')"' +
+      (s.status !== 'pending' ? ' disabled' : '') + '>Accept</button>' +
+      '<button class="btn btn-reject" onclick="respondSuggestion(\'' + s.id + '\', \'reject\')"' +
+      (s.status !== 'pending' ? ' disabled' : '') + '>Reject</button>' +
+      (s.status !== 'pending' ? '<span class="suggestion-status-label">' + s.status + '</span>' : '') +
+      '</div>' +
+      '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function respondSuggestion(id, action) {
+  var url = '/api/suggestions/' + id + '/' + action;
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', url);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      loadSuggestions();
+    }
+  };
+  xhr.send('{}');
+}
+</script>
+{% endblock %}

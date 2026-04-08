@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Simulate{% endblock %}
+{% block heading %}Simulate{% endblock %}
+
+{% block body %}
+<section class="card">
+  <h2>What-If Scenario</h2>
+  <p class="form-hint">Describe a behavior change in natural language. Examples:</p>
+  <ul class="example-list">
+    <li><code>code from 8-10am</code></li>
+    <li><code>stop browsing after 9pm</code></li>
+    <li><code>limit browsing to 1hr</code></li>
+    <li><code>add 30min walk at 12pm</code></li>
+  </ul>
+  <form id="simulate-form" class="simulate-form">
+    <input type="text" id="scenario-input" class="text-input"
+           placeholder="e.g. code from 8-10am before email"
+           autocomplete="off" required>
+    <button type="submit" class="btn btn-primary" id="sim-btn">Simulate</button>
+  </form>
+</section>
+
+<div id="sim-result" class="sim-result" style="display:none">
+  <section class="card">
+    <h2>Result</h2>
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Baseline</div>
+        <div class="stat-value" id="sim-baseline">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Simulated</div>
+        <div class="stat-value" id="sim-after">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Delta</div>
+        <div class="stat-value" id="sim-delta">--</div>
+      </div>
+    </div>
+    <div class="sim-summary" id="sim-summary"></div>
+  </section>
+
+  <section class="card">
+    <h2>Intervention Parsed</h2>
+    <div id="sim-intervention" class="intervention-detail"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('simulate-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var scenario = document.getElementById('scenario-input').value.trim();
+  if (!scenario) return;
+
+  var btn = document.getElementById('sim-btn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/simulate');
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.onload = function() {
+    btn.disabled = false;
+    btn.textContent = 'Simulate';
+
+    if (xhr.status === 200) {
+      var data = JSON.parse(xhr.responseText);
+      showResult(data);
+    } else {
+      var err = JSON.parse(xhr.responseText);
+      alert('Error: ' + (err.error || 'Unknown error'));
+    }
+  };
+  xhr.onerror = function() {
+    btn.disabled = false;
+    btn.textContent = 'Simulate';
+    alert('Network error');
+  };
+  xhr.send(JSON.stringify({ scenario: scenario }));
+});
+
+function showResult(data) {
+  document.getElementById('sim-result').style.display = 'block';
+  document.getElementById('sim-baseline').textContent = formatPercent(data.baseline_score);
+  document.getElementById('sim-after').textContent = formatPercent(data.simulated_score);
+
+  var deltaEl = document.getElementById('sim-delta');
+  var deltaStr = (data.score_delta >= 0 ? '+' : '') + formatPercent(data.score_delta);
+  deltaEl.textContent = deltaStr;
+  deltaEl.className = 'stat-value ' + (data.score_delta >= 0 ? 'delta-positive' : 'delta-negative');
+
+  document.getElementById('sim-summary').textContent = data.summary;
+
+  var iv = data.intervention;
+  var html = '<div><strong>Type:</strong> ' + iv.type + '</div>' +
+    '<div><strong>Activity:</strong> ' + (iv.activity || 'N/A') + '</div>' +
+    '<div><strong>Description:</strong> ' + escapeHtml(iv.description) + '</div>';
+  if (Object.keys(iv.params).length > 0) {
+    html += '<div><strong>Parameters:</strong> ' + escapeHtml(JSON.stringify(iv.params)) + '</div>';
+  }
+  document.getElementById('sim-intervention').innerHTML = html;
+}
+</script>
+{% endblock %}

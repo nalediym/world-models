@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Dashboard{% endblock %} - Life World Model</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-brand">LWM</div>
+    <a href="/" class="nav-link{% if request.path == '/' %} active{% endif %}">Today</a>
+    <a href="/patterns" class="nav-link{% if request.path == '/patterns' %} active{% endif %}">Patterns</a>
+    <a href="/suggestions" class="nav-link{% if request.path == '/suggestions' %} active{% endif %}">Suggestions</a>
+    <a href="/goals" class="nav-link{% if request.path == '/goals' %} active{% endif %}">Goals</a>
+    <a href="/history" class="nav-link{% if request.path == '/history' %} active{% endif %}">History</a>
+    <a href="/simulate" class="nav-link{% if request.path == '/simulate' %} active{% endif %}">Simulate</a>
+  </nav>
+
+  <main class="content">
+    <header class="page-header">
+      <h1>{% block heading %}Dashboard{% endblock %}</h1>
+      <span class="header-date" id="header-date"></span>
+    </header>
+    <div class="page-body">
+      {% block body %}{% endblock %}
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

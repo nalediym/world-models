@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block heading %}Today{% endblock %}
+
+{% block body %}
+<div class="stats-row" id="today-stats">
+  <div class="stat-card">
+    <div class="stat-label">Day Score</div>
+    <div class="stat-value" id="day-score">--</div>
+    <div class="stat-sub" id="day-grade"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Events</div>
+    <div class="stat-value" id="event-count">--</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Buckets</div>
+    <div class="stat-value" id="bucket-count">--</div>
+  </div>
+</div>
+
+<section class="card">
+  <h2>Timeline</h2>
+  <div class="timeline-strip" id="timeline-strip">
+    <div class="empty-state">Loading timeline...</div>
+  </div>
+  <div class="timeline-legend" id="timeline-legend"></div>
+</section>
+
+<section class="card">
+  <h2>Activity Breakdown</h2>
+  <div id="activity-breakdown" class="breakdown-list">
+    <div class="empty-state">Loading...</div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  fetchJSON('/api/today', function(data) {
+    document.getElementById('header-date').textContent = data.date;
+    document.getElementById('day-score').textContent = formatPercent(data.score.total);
+    document.getElementById('day-grade').textContent = 'Grade: ' + data.score.grade;
+    document.getElementById('event-count').textContent = data.event_count;
+    document.getElementById('bucket-count').textContent = data.bucket_count;
+
+    renderTimeline(data.timeline);
+    renderBreakdown(data.timeline);
+  });
+});
+
+function renderTimeline(timeline) {
+  var strip = document.getElementById('timeline-strip');
+  if (!timeline.length) {
+    strip.innerHTML = '<div class="empty-state">No data for today. Run <code>lwm collect</code> first.</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < timeline.length; i++) {
+    var bucket = timeline[i];
+    var color = activityColor(bucket.activity);
+    html += '<div class="timeline-bucket" ' +
+      'style="background:' + color + '" ' +
+      'title="' + bucket.time + ' - ' + bucket.activity +
+      (bucket.domain ? ' (' + escapeHtml(bucket.domain) + ')' : '') +
+      ' [' + bucket.event_count + ' events]">' +
+      '</div>';
+  }
+  strip.innerHTML = html;
+
+  // Build legend from unique activities
+  var activities = {};
+  for (var j = 0; j < timeline.length; j++) {
+    activities[timeline[j].activity] = true;
+  }
+  var legendHtml = '';
+  for (var act in activities) {
+    legendHtml += '<span class="legend-item">' +
+      '<span class="legend-dot" style="background:' + activityColor(act) + '"></span>' +
+      act + '</span>';
+  }
+  document.getElementById('timeline-legend').innerHTML = legendHtml;
+}
+
+function renderBreakdown(timeline) {
+  var counts = {};
+  for (var i = 0; i < timeline.length; i++) {
+    var act = timeline[i].activity;
+    counts[act] = (counts[act] || 0) + 1;
+  }
+
+  var total = timeline.length || 1;
+  var items = [];
+  for (var act in counts) {
+    items.push({ activity: act, count: counts[act], pct: counts[act] / total });
+  }
+  items.sort(function(a, b) { return b.count - a.count; });
+
+  var container = document.getElementById('activity-breakdown');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state">No activity data.</div>';
+    return;
+  }
+
+  var html = '';
+  for (var k = 0; k < items.length; k++) {
+    var item = items[k];
+    var minutes = item.count * 15;
+    html += '<div class="breakdown-row">' +
+      '<span class="breakdown-label">' +
+      '<span class="legend-dot" style="background:' + activityColor(item.activity) + '"></span>' +
+      item.activity + '</span>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' +
+      (item.pct * 100) + '%;background:' + activityColor(item.activity) + '"></div></div>' +
+      '<span class="breakdown-value">' + minutes + 'min (' + Math.round(item.pct * 100) + '%)</span>' +
+      '</div>';
+  }
+  container.innerHTML = html;
+}
+</script>
+{% endblock %}

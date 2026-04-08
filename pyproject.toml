@@ -30,6 +30,9 @@ mlx = [
 gemini = [
   "google-genai>=1.0.0"
 ]
+web = [
+  "flask>=3.0.0"
+]
 
 [project.scripts]
 lwm = "life_world_model.cli:main"
