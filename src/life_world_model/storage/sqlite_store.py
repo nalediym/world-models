@@ -9,6 +9,7 @@ from life_world_model.types import (
     Experiment,
     ExperimentStatus,
     FeedbackAction,
+    Pattern,
     RawEvent,
     SuggestionFeedback,
 )
@@ -50,6 +51,19 @@ CREATE TABLE IF NOT EXISTS experiments (
 )
 """
 
+PATTERNS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS discovered_patterns (
+  name TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  description TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  days_observed INTEGER NOT NULL,
+  first_seen TEXT,
+  last_seen TEXT
+)
+"""
+
 MIGRATIONS = [
     "ALTER TABLE raw_events ADD COLUMN duration_seconds REAL",
     "ALTER TABLE raw_events ADD COLUMN metadata TEXT",
@@ -66,6 +80,7 @@ class SQLiteStore:
             connection.execute(SCHEMA)
             connection.execute(SUGGESTION_FEEDBACK_SCHEMA)
             connection.execute(EXPERIMENTS_SCHEMA)
+            connection.execute(PATTERNS_SCHEMA)
             self._run_migrations(connection)
             connection.commit()
 
@@ -277,3 +292,66 @@ class SQLiteStore:
             result_score=rscore,
             result_summary=rsummary,
         )
+
+    # ------------------------------------------------------------------
+    # Patterns
+    # ------------------------------------------------------------------
+
+    def save_patterns(self, patterns: list[Pattern]) -> None:
+        """Upsert discovered patterns."""
+        self.initialize()
+        with sqlite3.connect(self.database_path) as conn:
+            for p in patterns:
+                conn.execute(
+                    """INSERT OR REPLACE INTO discovered_patterns
+                       (name, category, description, evidence, confidence,
+                        days_observed, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        p.name,
+                        p.category,
+                        p.description,
+                        json.dumps(p.evidence),
+                        p.confidence,
+                        p.days_observed,
+                        p.first_seen.isoformat() if p.first_seen else None,
+                        p.last_seen.isoformat() if p.last_seen else None,
+                    ),
+                )
+            conn.commit()
+
+    def load_patterns(self) -> list[Pattern]:
+        self.initialize()
+        with sqlite3.connect(self.database_path) as conn:
+            rows = conn.execute(
+                """SELECT name, category, description, evidence, confidence,
+                          days_observed, first_seen, last_seen
+                   FROM discovered_patterns
+                   ORDER BY confidence DESC"""
+            ).fetchall()
+        return [
+            Pattern(
+                name=name,
+                category=cat,
+                description=desc,
+                evidence=json.loads(ev),
+                confidence=conf,
+                days_observed=days,
+                first_seen=date.fromisoformat(fs) if fs else None,
+                last_seen=date.fromisoformat(ls) if ls else None,
+            )
+            for name, cat, desc, ev, conf, days, fs, ls in rows
+        ]
+
+    def delete_patterns(self, pattern_names: list[str]) -> None:
+        """Remove patterns that have decayed below threshold."""
+        self.initialize()
+        if not pattern_names:
+            return
+        placeholders = ",".join("?" for _ in pattern_names)
+        with sqlite3.connect(self.database_path) as conn:
+            conn.execute(
+                f"DELETE FROM discovered_patterns WHERE name IN ({placeholders})",
+                pattern_names,
+            )
+            conn.commit()

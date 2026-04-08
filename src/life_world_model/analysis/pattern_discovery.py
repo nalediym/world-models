@@ -18,6 +18,14 @@ def discover_patterns(multi_day_states: dict[date, list[LifeState]]) -> list[Pat
     return patterns
 
 
+def compare_patterns(
+    old_patterns: list[Pattern], new_patterns: list[Pattern]
+) -> list[Pattern]:
+    """Return patterns in new_patterns that are not in old_patterns (by name)."""
+    old_names = {p.name for p in old_patterns}
+    return [p for p in new_patterns if p.name not in old_names]
+
+
 def detect_routines(multi_day_states: dict[date, list[LifeState]]) -> list[Pattern]:
     """Find activities that repeat at the same hour on >60% of observed days."""
     if not multi_day_states:
